@@ -27,9 +27,9 @@ func ConfigFromEnv() *Config {
 		DBName:     envOrDefault("ISUREAL_DB_NAME", "isureal"),
 		LogLevel:   envOrDefault("ISUREAL_LOG_LEVEL", "debug"),
 	}
-	if c.Region == "asia" {
-		c.ImageFiles = &imageFileStore{root: "/home/isucon/.isureal-image-files"}
-	}
+	// Every app server serves its own region and keeps a local copy of the
+	// immutable image files, so all regions enable the file cache.
+	c.ImageFiles = &imageFileStore{root: "/home/isucon/.isureal-image-files"}
 	return c
 }
 
