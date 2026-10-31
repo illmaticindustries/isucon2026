@@ -103,7 +103,7 @@ class DeployTest(unittest.TestCase):
 
     def test_invalid_nginx_config_is_restored(self):
         self.exercise_nginx(fail=True)
-    def exercise_postgres(self, fail=False, previous=None):
+    def exercise_postgres(self, previous=None, pending=False, invalid=False, restart_fails=False):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             pgconf, state, stage, bins = [root/n for n in ['conf.d', 'state', 'stage', 'bin']]
@@ -114,25 +114,29 @@ class DeployTest(unittest.TestCase):
             (stage/'source/postgres/tuning.conf').write_text('new')
             with tarfile.open(stage/'postgres.tar', 'w') as tar:
                 tar.add(stage/'source/postgres', arcname='postgres')
+            # The fakes only report invalid/pending settings while the new file is installed.
+            new_installed = 'grep -q new "$PGCONF/tuning.conf" 2>/dev/null'
             scripts = {
                 # Drop -u/-o/-g options so the fakes run as the current user.
                 'sudo': '#!/bin/bash\nshift\nif [ "$1" = -u ]; then shift 2; fi\nexec "$@"\n',
                 'install': '#!/bin/bash\nargs=()\nwhile [ $# -gt 0 ]; do case "$1" in -o|-g) shift 2 ;; *) args+=("$1"); shift ;; esac; done\nexec /usr/bin/install "${args[@]}"\n',
-                # Fail the first restart while the new file is installed.
-                'systemctl': '#!/bin/bash\nif [ "$1" = restart ] && [ -f "$PG_FAIL" ] && grep -q new "$PGCONF/tuning.conf"; then exit 1; fi\nexit 0\n',
+                'systemctl': '#!/bin/bash\ncase "$1" in reload|restart) echo "$1" >> "$ACTIONS" ;; esac\nif [ "$1" = restart ] && [ -n "$RESTART_FAILS" ] && ' + new_installed + '; then exit 1; fi\nexit 0\n',
                 'pg_isready': '#!/bin/bash\nexit 0\n',
-                'psql': '#!/bin/bash\necho "shared_buffers = 131072 8kB"\n',
+                'psql': '#!/bin/bash\nq="${@: -1}"\ncase "$q" in\n'
+                        '*"count(*) FROM pg_file_settings"*) if [ -n "$INVALID" ] && ' + new_installed + '; then echo 1; else echo 0; fi ;;\n'
+                        '*"count(*) FROM pg_settings WHERE pending_restart"*) if [ -n "$PENDING" ] && ' + new_installed + '; then echo 1; else echo 0; fi ;;\n'
+                        '*) echo "bgwriter_delay = 50 ms" ;;\nesac\n',
                 'flock': '#!/bin/bash\nexit 0\n',
             }
             for n, text in scripts.items():
                 (bins/n).write_text(text)
                 (bins/n).chmod(0o755)
-            marker = root/'pg-fail'
-            if fail:
-                marker.touch()
-            env = dict(os.environ, PATH=str(bins)+':'+os.environ['PATH'], PG_FAIL=str(marker), PGCONF=str(pgconf))
+            actions = root/'actions'
+            env = dict(os.environ, PATH=str(bins)+':'+os.environ['PATH'], PGCONF=str(pgconf), ACTIONS=str(actions),
+                       PENDING='1' if pending else '', INVALID='1' if invalid else '', RESTART_FAILS='1' if restart_fails else '')
             script = (ROOT/'scripts/deploy-remote.sh').read_text().replace('pgconf=/etc/postgresql/16/main/conf.d', 'pgconf='+str(pgconf)).replace('state=/home/isucon/.isureal-deploy', 'state='+str(state))
             result = subprocess.run(['bash', '-s', '--', 'postgres', str(stage)], input=script, text=True, env=env, capture_output=True)
+            fail = invalid or restart_fails
             self.assertEqual(result.returncode != 0, fail, result.stderr + result.stdout)
             conf = pgconf/'tuning.conf'
             if not fail:
@@ -141,15 +145,22 @@ class DeployTest(unittest.TestCase):
                 self.assertFalse(conf.exists())
             else:
                 self.assertEqual(conf.read_text(), previous)
+            return actions.read_text().split() if actions.exists() else []
 
-    def test_postgres_tuning_applies(self):
-        self.exercise_postgres(previous='old')
+    def test_postgres_sighup_settings_reload_without_restart(self):
+        self.assertEqual(self.exercise_postgres(previous='old'), ['reload'])
+
+    def test_postgres_postmaster_settings_restart(self):
+        self.assertEqual(self.exercise_postgres(previous='old', pending=True), ['reload', 'restart'])
+
+    def test_postgres_invalid_settings_restore_without_reload(self):
+        self.assertEqual(self.exercise_postgres(previous='old', invalid=True), [])
 
     def test_postgres_start_failure_restores_previous_tuning(self):
-        self.exercise_postgres(fail=True, previous='old')
+        self.assertEqual(self.exercise_postgres(previous='old', pending=True, restart_fails=True), ['reload', 'restart', 'restart'])
 
     def test_postgres_start_failure_removes_first_tuning(self):
-        self.exercise_postgres(fail=True)
+        self.exercise_postgres(pending=True, restart_fails=True)
 
 if __name__ == '__main__':
     unittest.main()
