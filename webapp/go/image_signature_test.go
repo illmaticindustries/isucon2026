@@ -68,6 +68,24 @@ func TestSignatureParallelAndBounded(t *testing.T) {
 	}
 }
 
+func TestSignatureCacheHoldsWorkingSetBeyondLegacyLimit(t *testing.T) {
+	signatureCache.Lock()
+	signatureCache.current = make(map[signatureCacheKey][sha256.Size]byte)
+	signatureCache.previous = nil
+	signatureCache.Unlock()
+
+	// The signed-image working set of one expiry bucket exceeds the older
+	// 1<<17 limit, which rotated entries away before they were reused.
+	const workingSet = 300_000
+	for i := 0; i < workingSet; i++ {
+		storeImageSignature(signatureCacheKey{imageID: fmt.Sprint("img-", i)}, [sha256.Size]byte{byte(i)})
+	}
+	first := signatureCacheKey{imageID: fmt.Sprint("img-", 0)}
+	if _, ok := loadImageSignature(first); !ok {
+		t.Fatal("working set larger than the legacy limit was evicted")
+	}
+}
+
 func TestSignatureCacheKeepsPreviousGeneration(t *testing.T) {
 	signatureCache.Lock()
 	signatureCache.current = make(map[signatureCacheKey][sha256.Size]byte)
