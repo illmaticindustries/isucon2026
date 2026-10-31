@@ -21,9 +21,7 @@ import (
 type searchTestState struct {
 	users         []User
 	blocked       map[string]bool
-	rows          int
 	queries       int
-	fetches       int
 	reads, closes int
 	failRead      bool
 }
@@ -38,18 +36,7 @@ func (searchTestDriver) Open(string) (driver.Conn, error) {
 }
 func (c *searchTestConn) Prepare(string) (driver.Stmt, error) { return nil, fmt.Errorf("unsupported") }
 func (c *searchTestConn) Close() error                        { return nil }
-func (c *searchTestConn) Begin() (driver.Tx, error)           { return searchTestTx{}, nil }
-func (c *searchTestConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
-	return searchTestTx{}, nil
-}
-
-// Accept []string for "id = ANY($1)" as pgx/stdlib does.
-func (c *searchTestConn) CheckNamedValue(*driver.NamedValue) error { return nil }
-
-type searchTestTx struct{}
-
-func (searchTestTx) Commit() error   { return nil }
-func (searchTestTx) Rollback() error { return nil }
+func (c *searchTestConn) Begin() (driver.Tx, error)           { return nil, fmt.Errorf("unexpected transaction") }
 
 type searchTestRows struct {
 	notificationRows
@@ -69,40 +56,24 @@ func (r *searchTestRows) Next(v []driver.Value) error {
 func (r *searchTestRows) Close() error { r.state.closes++; return nil }
 func (c *searchTestConn) QueryContext(_ context.Context, q string, args []driver.NamedValue) (driver.Rows, error) {
 	s := c.state
-	if strings.Contains(q, "block_relations") {
-		r := &notificationRows{columns: []string{"user_id"}}
-		for id := range s.blocked {
-			r.values = append(r.values, []driver.Value{id})
-		}
-		return r, nil
-	}
-	if strings.Contains(q, "id = ANY($1)") {
-		s.fetches++
-		ids := args[0].Value.([]string)
-		r := &notificationRows{columns: userColumns}
-		// Return rows in reverse so the handler must restore the scan order.
-		for i := len(ids) - 1; i >= 0; i-- {
-			for _, u := range s.users {
-				if u.ID == ids[i] {
-					r.values = append(r.values, []driver.Value{u.ID, u.Username, u.SecretKeyHash, u.DisplayName, u.Bio, nil, u.Region, u.AccountType, u.Status})
-				}
-			}
-		}
-		return r, nil
-	}
 	s.queries++
-	r := &notificationRows{columns: []string{"id", "username", "display_name"}}
-	if !strings.Contains(q, "SELECT id, username, display_name FROM users") || !strings.Contains(q, "ORDER BY username, id") {
+	if q != searchCandidateQuery+" LIMIT 51" && q != searchCandidateQuery {
 		return nil, fmt.Errorf("unexpected query: %s", q)
 	}
-	cursor, id := args[1].Value.(string), args[2].Value.(string)
+	r := &notificationRows{columns: userColumns}
+	cursor, id, query := args[1].Value.(string), args[2].Value.(string), args[3].Value.(string)
 	for _, u := range s.users {
-		if u.Status != "active" || u.ID == args[0].Value || (cursor != "" && (u.Username < cursor || (u.Username == cursor && u.ID <= id))) {
+		if u.Status != "active" || u.ID == args[0].Value || s.blocked[u.ID] || (cursor != "" && (u.Username < cursor || (u.Username == cursor && u.ID <= id))) {
 			continue
 		}
-		r.values = append(r.values, []driver.Value{u.ID, u.Username, u.DisplayName})
+		if !strings.Contains(normalizeSearchText(u.Username), query) && !strings.Contains(normalizeSearchText(u.DisplayName), query) {
+			continue
+		}
+		r.values = append(r.values, []driver.Value{u.ID, u.Username, u.SecretKeyHash, u.DisplayName, u.Bio, nil, u.Region, u.AccountType, u.Status})
+		if strings.HasSuffix(q, " LIMIT 51") && len(r.values) == 51 {
+			break
+		}
 	}
-	s.rows += len(r.values)
 	return &searchTestRows{*r, s}, nil
 }
 func init() { sql.Register("search-pagination-test", searchTestDriver{}) }
@@ -193,9 +164,6 @@ func TestSearchPaginationMatchesFullScan(t *testing.T) {
 				}
 				if s.queries != pages {
 					t.Fatalf("%d scan queries for %d pages", s.queries, pages)
-				}
-				if s.fetches > pages {
-					t.Fatalf("%d row fetches for %d pages", s.fetches, pages)
 				}
 			})
 		}
