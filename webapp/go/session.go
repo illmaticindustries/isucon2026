@@ -9,78 +9,12 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v5"
 )
-
-// sessionCacheTTL is short so that any state change made on another app server
-// (login, logout, account deletion) is reflected within a bounded window.
-// Invalidations performed by this process are applied immediately.
-const sessionCacheTTL = 10 * time.Second
-
-// sessionCacheSweepInterval is how many stores occur between opportunistic
-// sweeps that drop expired entries for tokens that are never requested again.
-const sessionCacheSweepInterval = 1024
-
-type cachedSession struct {
-	session  *Session
-	expireAt time.Time
-}
-
-var (
-	loginSessionCache    sync.Map
-	loginSessionCacheOps atomic.Int64
-)
-
-func loadCachedSession(tokenHash string) (*Session, bool) {
-	value, ok := loginSessionCache.Load(tokenHash)
-	if !ok {
-		return nil, false
-	}
-	entry := value.(cachedSession)
-	if time.Now().After(entry.expireAt) {
-		loginSessionCache.Delete(tokenHash)
-		return nil, false
-	}
-	return entry.session, true
-}
-
-func storeCachedSession(tokenHash string, session *Session) {
-	loginSessionCache.Store(tokenHash, cachedSession{
-		session:  session,
-		expireAt: time.Now().Add(sessionCacheTTL),
-	})
-	if loginSessionCacheOps.Add(1)%sessionCacheSweepInterval == 0 {
-		sweepExpiredSessions(time.Now())
-	}
-}
-
-func sweepExpiredSessions(now time.Time) {
-	loginSessionCache.Range(func(key, value any) bool {
-		if entry, ok := value.(cachedSession); ok && now.After(entry.expireAt) {
-			loginSessionCache.Delete(key)
-		}
-		return true
-	})
-}
-
-func invalidateCachedSession(tokenHash string) {
-	loginSessionCache.Delete(tokenHash)
-}
-
-func invalidateCachedSessionsForUser(userID string) {
-	loginSessionCache.Range(func(key, value any) bool {
-		if entry, ok := value.(cachedSession); ok && entry.session.UserID == userID {
-			loginSessionCache.Delete(key)
-		}
-		return true
-	})
-}
 
 type Session struct {
 	Region    string    `db:"region" json:"-"`
@@ -112,11 +46,6 @@ func getSessionFromHeader(c *echo.Context, db *sqlx.DB) (*Session, error) {
 
 	tokenHashBytes := sha256.Sum256([]byte(token))
 	tokenHash := hex.EncodeToString(tokenHashBytes[:])
-
-	if session, ok := loadCachedSession(tokenHash); ok {
-		return session, nil
-	}
-
 	var session Session
 	err := db.GetContext(c.Request().Context(), &session, `
 		SELECT s.user_id, s.token_hash, s.created_at, u.region
@@ -130,7 +59,6 @@ func getSessionFromHeader(c *echo.Context, db *sqlx.DB) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get session: %w", err)
 	}
-	storeCachedSession(tokenHash, &session)
 	return &session, nil
 }
 
@@ -173,8 +101,6 @@ func InvalidateLoginSession(db *sqlx.DB, userID string, tokenHash string) error 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
-
-	invalidateCachedSession(tokenHash)
 
 	return nil
 }
