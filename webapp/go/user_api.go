@@ -237,7 +237,6 @@ func updateMeHandler(h *HandlerContext) echo.HandlerFunc {
 		// The session carries the region; a profile/region change must not be
 		// shadowed by a cached read.
 		invalidateCachedSessionsForUser(session.UserID)
-		invalidateViewerContext(session.UserID)
 		return c.JSON(http.StatusOK, updateMeResponse(newGetMeResponse(user)))
 	}
 }

@@ -31,7 +31,6 @@ func deleteFriendshipHandler(h *HandlerContext) echo.HandlerFunc {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
-		invalidateViewerContexts(actor, input.UserID)
 		return c.NoContent(http.StatusNoContent)
 	}
 }
@@ -151,7 +150,6 @@ func blockHandler(h *HandlerContext) echo.HandlerFunc {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
-		invalidateViewerContexts(actor, input.UserID)
 		return c.NoContent(http.StatusNoContent)
 	}
 }
@@ -180,7 +178,6 @@ func unblockHandler(h *HandlerContext) echo.HandlerFunc {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
-		invalidateViewerContexts(actor, input.UserID)
 		return c.NoContent(http.StatusNoContent)
 	}
 }
