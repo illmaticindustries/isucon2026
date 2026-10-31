@@ -219,7 +219,8 @@ func TestWarmPostDatabaseExchange(t *testing.T) {
 	}
 	db.MustExec(string(schema))
 	db.MustExec(`INSERT INTO users(id,username,secret_key_hash,display_name,region) VALUES
-		('one','one',repeat('12',32),'One','asia'),('two','two',repeat('34',32),'Two','asia');
+		('one','one',repeat('12',32),'One','asia'),('two','two',repeat('34',32),'Two','asia'),
+		('three','three',repeat('56',32),'Three','asia');
 		INSERT INTO posting_windows(id,region,local_date,starts_at,on_time_deadline)
 		VALUES('today','asia',CURRENT_DATE,now()-interval '1 minute',now()+interval '1 hour')`)
 	cfg, err := pgx.ParseConfig(os.Getenv("ISUREAL_TEST_DB_DSN"))
@@ -247,11 +248,15 @@ func TestWarmPostDatabaseExchange(t *testing.T) {
 	if err := jpeg.Encode(&imageBytes, image.NewGray(image.Rect(0, 0, 8, 8)), nil); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"one", "two"} {
+	// The driver also checks the connection on its first return from the
+	// pool (or after idling). Include and report that real exchange before
+	// measuring a connection that's already been returned and checked.
+	for _, id := range []string{"one", "two", "three"} {
 		writes.Store(0)
 		if _, _, err := storePhotoPost(t.Context(), measured, id, createPostRequest{Visibility: "public"}, PostLocation{Kind: "none"}, imageBytes.Bytes()); err != nil {
 			t.Fatal(err)
 		}
+		t.Logf("post %s: %d protocol writes", id, writes.Load())
 	}
 	if got := writes.Load(); got != 1 {
 		t.Fatalf("warmed post used %d protocol writes, want one batch", got)
