@@ -49,6 +49,7 @@ func NewServerWithDB(config *Config, db *sqlx.DB) *echo.Echo {
 	// Must run before ActionLogMiddleware writes the error response.
 	e.Use(DrainRequestBodyMiddleware)
 	e.Use(middleware.Recover())
+	e.Use(SlowRequestMiddleware(db.DB, 500*time.Millisecond))
 	e.HTTPErrorHandler = APIErrorHandler
 
 	handlerContext := &HandlerContext{
