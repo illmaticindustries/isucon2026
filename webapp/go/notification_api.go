@@ -34,26 +34,16 @@ func getNotificationsHandler(h *HandlerContext) echo.HandlerFunc {
 		if err := controller.Flush(); err != nil {
 			return nil
 		}
-		ticker := time.NewTicker(500 * time.Millisecond)
+		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 		for {
-			user, err := getUser(ctx, h.DB, userID)
-			if err != nil {
-				if !errors.Is(err, sql.ErrNoRows) && ctx.Err() == nil {
-					c.Logger().Error("failed to get notification recipient", "error", err)
-				}
-				return nil
-			}
-			if user.Region != session.Region {
-				return nil
-			}
 			var notification getNotificationsResponse
-			err = h.DB.GetContext(ctx, &notification, `
+			err := h.DB.GetContext(ctx, &notification, `
     SELECT n.id, n.posting_window_id, w.region, n.created_at
     FROM notifications n JOIN posting_windows w ON w.id = n.posting_window_id
-    WHERE n.user_id = $1 AND n.created_at > $2 AND w.ended_at IS NULL
+    WHERE n.user_id = $1 AND n.created_at > $2 AND w.ended_at IS NULL AND w.region = $3
     ORDER BY n.created_at, n.id LIMIT 1
-   `, userID, connectedAt)
+   `, userID, connectedAt, session.Region)
 			if err == nil {
 				data, err := json.Marshal(notification)
 				if err != nil {
