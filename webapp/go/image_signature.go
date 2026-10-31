@@ -8,17 +8,24 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 )
 
 const imageURLLifetime = 24 * time.Hour
 const imageSignatureIterations = 1000
 
+var imageSigningKeyCache sync.Map
+
 func imageSigningKey(secretKeyHash string) ([]byte, error) {
+	if cached, ok := imageSigningKeyCache.Load(secretKeyHash); ok {
+		return cached.([]byte), nil
+	}
 	key, err := hex.DecodeString(secretKeyHash)
 	if err != nil || len(key) != sha256.Size {
 		return nil, fmt.Errorf("invalid image signing key")
 	}
+	imageSigningKeyCache.Store(secretKeyHash, key)
 	return key, nil
 }
 
