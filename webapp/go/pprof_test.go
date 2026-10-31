@@ -33,15 +33,27 @@ func TestDiagnosticStatsMeasuresPoolWait(t *testing.T) {
 	if _, err := db.Conn(ctx); err == nil {
 		t.Fatal("expected a pool timeout")
 	}
+	forwarded, err := sql.Open("search-pagination-test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer forwarded.Close()
+	forwarded.SetMaxOpenConns(15)
+	diagnosticForwarded.Store("europe", forwarded)
+	defer diagnosticForwarded.Delete("europe")
 	diagnosticDB.Store(db)
 	r = httptest.NewRecorder()
 	dbStatsHandler(r, httptest.NewRequest("GET", "/debug/dbstats", nil))
 	var got struct {
-		DB      sql.DBStats `json:"db"`
-		Started time.Time   `json:"started"`
+		DB        sql.DBStats            `json:"db"`
+		Forwarded map[string]sql.DBStats `json:"forwarded"`
+		Started   time.Time              `json:"started"`
 	}
 	if err := json.Unmarshal(r.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
+	}
+	if got.Forwarded["europe"].MaxOpenConnections != 15 || got.Forwarded["europe"].WaitCount != 0 {
+		t.Fatalf("forwarded pool: %+v", got.Forwarded)
 	}
 	if r.Code != 200 || got.DB.WaitCount != 1 || got.DB.WaitDuration <= 0 || got.DB.InUse != 1 || got.DB.MaxOpenConnections != 1 || !got.Started.Equal(diagnosticStarted) {
 		t.Fatalf("unexpected pool metrics: %+v (HTTP %d)", got, r.Code)
