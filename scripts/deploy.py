@@ -18,7 +18,8 @@ ALP_SHA256 = 'e5830a70ca064aa89b6ed4715a71591e83e0fe9c85284bbec4208b7d949cbc42'
 # Path parameters of webapp/go/server.go routes, most specific first.
 ALP_MATCH = ','.join([
     '^/api/admin/users/[^/]+/certification$', '^/api/posts/[^/]+/comments$', '^/api/posts/[^/]+/realmojis$',
-    '^/api/friend-requests/[^/]+/[^/]+$', '^/api/(posts|users|blocks|follows|friendships|comments|realmojis|images|memories|feeds)/[^/]+$',
+    '^/api/friend-requests/[^/]+/[^/]+$',
+    *['^/api/' + r + '/[^/]+$' for r in ['posts', 'users', 'blocks', 'follows', 'friendships', 'comments', 'realmojis', 'images', 'memories', 'feeds']],
     '^/assets/.+$',
 ])
 HOSTS = {'asia1': '54.248.250.51', 'europe1': '54.248.84.101', 'america1': '52.196.60.188', 'asia2': '52.197.163.28'}
