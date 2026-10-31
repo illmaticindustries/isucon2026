@@ -40,14 +40,12 @@ func createFriendRequestHandler(h *HandlerContext) echo.HandlerFunc {
 		if blocked {
 			return NewAPIError(http.StatusConflict, "relationship_conflict")
 		}
-		friends, err := getFriendIDs(ctx, tx, actor)
+		friendly, err := isFriend(ctx, tx, actor, input.RecipientID)
 		if err != nil {
 			return err
 		}
-		for _, id := range friends {
-			if id == input.RecipientID {
-				return NewAPIError(http.StatusConflict, "relationship_conflict")
-			}
+		if friendly {
+			return NewAPIError(http.StatusConflict, "relationship_conflict")
 		}
 		var existingID string
 		err = tx.GetContext(ctx, &existingID, `

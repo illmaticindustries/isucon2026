@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
-	"slices"
 	"strings"
 
 	"github.com/labstack/echo/v5"
@@ -105,11 +104,11 @@ func getUserHandler(h *HandlerContext) echo.HandlerFunc {
 		if blocked {
 			return NewAPIError(http.StatusNotFound, "relationship_not_found")
 		}
-		friends, err := getFriendIDs(ctx, h.DB, viewer)
+		friendly, err := isFriend(ctx, h.DB, viewer, user.ID)
 		if err != nil {
 			return err
 		}
-		if user.AccountType != "certified_public" && !slices.Contains(friends, user.ID) {
+		if user.AccountType != "certified_public" && !friendly {
 			user.Bio = ""
 		}
 		return c.JSON(http.StatusOK, getUserResponse(newRelationshipUserResponse(user)))
