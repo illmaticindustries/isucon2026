@@ -44,7 +44,16 @@ type signatureCacheKey struct {
 	exp     int64
 }
 
-const signatureCacheLimit = 1 << 17
+// signatureCacheLimit must exceed the set of images signed within one expiry
+// bucket. Each feed page signs up to 50 post images, RealMoji reactions and
+// profile images, so the concurrent working set is on the order of the number
+// of images reachable from the active users' feeds. At 1<<17 the working set
+// overflowed and the generational rotation evicted entries before they were
+// reused, so the 1000-round HMAC was recomputed for nearly every image
+// (imageSignature was ~30% of CPU on asia1). The map only grows to the number
+// of distinct images actually signed (~200 bytes each), so the higher limit
+// only costs memory proportional to the real working set.
+const signatureCacheLimit = 1 << 20
 
 // signatureCache keeps the current and the previous generation of signatures so
 // that overflow drops the older half instead of clearing everything. With a
