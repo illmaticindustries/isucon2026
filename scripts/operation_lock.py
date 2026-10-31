@@ -14,6 +14,7 @@ import uuid
 
 COORDINATOR = 'isucon@52.197.163.28'
 SCRIPT = Path(__file__).with_name('operation_state.py')
+APP_HOSTS = 'asia1 europe1 america1'
 
 
 def require_portal_idle():
@@ -45,6 +46,11 @@ def reserve(kind, description):
     return token
 
 
+def rotate_nginx_logs():
+    # Start each benchmark with access logs that contain only its own requests.
+    subprocess.run([sys.executable, str(Path(__file__).with_name('deploy.py')), 'nginx-rotate', '--hosts', APP_HOSTS], check=True)
+
+
 @contextlib.contextmanager
 def mutation(description):
     token = reserve('deploy', description)
@@ -67,6 +73,12 @@ def main():
         raise RuntimeError('Competition ended; no connections until organizer permission')
     if action == 'reserve':
         token = reserve('benchmark', os.environ.get('BENCH_NOTE', 'portal benchmark'))
+        try:
+            rotate_nginx_logs()
+        except BaseException:
+            print('nginx log rotation failed; reservation is retained. Check the app hosts, '
+                  'then release with OPERATION_TOKEN=' + token, file=sys.stderr)
+            raise
         print('Reservation acquired. Enqueue once, record the job ID, and keep this reservation '
               'until the job is FINISHED/FAIL and no job is pending.')
         print('Release: make bench-release PORTAL_IDLE=yes OPERATION_TOKEN=' + token)
