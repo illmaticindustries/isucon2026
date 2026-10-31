@@ -9,7 +9,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 class DeployTest(unittest.TestCase):
-    def exercise(self, fail=False):
+    def exercise(self, fail=False, compressed=False):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             base, state, stage, bins = [root/n for n in ['webapp', 'state', 'stage', 'bin']]
@@ -20,7 +20,7 @@ class DeployTest(unittest.TestCase):
                 (stage/'source'/name).write_text('new')
             (stage/'source/revision').write_text('new-sha\n')
             (base/'.deploy-revision').write_text('old-sha\n')
-            with tarfile.open(stage/'payload.tar', 'w') as tar:
+            with tarfile.open(stage/'payload.tar', 'w:gz' if compressed else 'w') as tar:
                 for name in ['go/isureal', 'sql/init.sh', 'sql/reset.sql', 'revision']:
                     tar.add(stage/'source'/name, arcname=name)
             scripts = {
@@ -54,6 +54,10 @@ class DeployTest(unittest.TestCase):
 
     def test_failed_restart_restores_previous_files(self):
         self.exercise(fail=True)
+
+    def test_compressed_activation_and_rollback(self):
+        self.exercise(compressed=True)
+        self.exercise(fail=True, compressed=True)
 
     def exercise_nginx(self, fail=False, host="asia1", backend_ready=True):
         with tempfile.TemporaryDirectory() as d:
