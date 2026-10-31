@@ -209,7 +209,7 @@ def main():
             ensure_app_schema(work, remote)
             payload = work/'payload.tar'
             (work/'revision').write_text(rev + '\n')
-            with tarfile.open(payload, 'w') as tar:
+            with tarfile.open(payload, 'w:gz', compresslevel=1) as tar:
                 for src, dest in [('webapp/go/isureal','go/isureal'), ('webapp/sql/init.sh','sql/init.sh'), ('webapp/sql/reset.sql','sql/reset.sql'), ('revision','revision')]:
                     tar.add(work/src, arcname=dest)
             # Stage under a unique directory; the remote lock serializes activation.
