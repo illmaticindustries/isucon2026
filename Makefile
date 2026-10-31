@@ -2,6 +2,7 @@ SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 export REF ?= HEAD
 export HOSTS ?= asia1 europe1 america1
+export DEPLOY_WORKERS ?= 3
 export SSH_OPTIONS ?= -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes
 
 .PHONY: help build deploy preflight rollback status logs deploy-indexes verify-indexes go-build-local nginx-deploy alp-install

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Deploy an origin-pushed revision through Make; never build the working tree."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import datetime
 import hashlib
 import os
@@ -31,6 +32,27 @@ def run(args, **kwargs):
 def output(args):
     return sp.check_output(args, text=True).strip()
 
+def run_hosts(names, action, workers=3):
+    """Join every host (including rollback) before returning to the reservation.
+
+    A failure must not release the shared reservation while other hosts mutate.
+    The caller's mutation context retains the reservation when we raise.
+    """
+    if len(set(names)) != len(names):
+        raise ValueError('duplicate hosts are not allowed')
+    if workers not in (1, 2, 3):
+        raise ValueError('DEPLOY_WORKERS must be 1, 2 or 3')
+    failures = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(action, name): name for name in names}
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as exc:
+                failures.append((futures[future], exc))
+    if failures:
+        raise RuntimeError('host operations failed: ' + ', '.join(name for name, _ in failures)) from failures[0][1]
+
 def ensure_app_schema(work, remote):
     """Apply only additive schema files bundled in the pushed application REF.
 
@@ -52,6 +74,9 @@ def main():
     p.add_argument('--hosts', default='asia1 europe1 america1')
     a = p.parse_args()
     names = a.hosts.split()
+    workers = int(os.environ.get('DEPLOY_WORKERS', '3'))
+    if workers not in (1, 2, 3) or len(set(names)) != len(names):
+        p.error('DEPLOY_WORKERS must be 1..3; HOSTS must not contain duplicates')
     if not names or any(n not in HOSTS for n in names):
         p.error('hosts must be registered names: ' + ' '.join(HOSTS))
     if a.action != 'build':
@@ -71,7 +96,7 @@ def main():
         payload = work/'nginx.tar'
         with tarfile.open(payload, 'w') as tar:
             tar.add(work/'etc/nginx', arcname='nginx')
-        for n in names:
+        def deploy_one_nginx(n):
             stage = output(ssh + ['isucon@'+HOSTS[n], 'mktemp -d /home/isucon/.deploy-stage.XXXXXXXX'])
             if not re.fullmatch(r'/home/isucon/\.deploy-stage\.[A-Za-z0-9]+', stage):
                 raise RuntimeError('unexpected stage path')
@@ -81,6 +106,7 @@ def main():
             finally:
                 remote(n, 'rm -rf -- ' + shlex.quote(stage))
             print(n + ': nginx config ' + rev, flush=True)
+        run_hosts(names, deploy_one_nginx, workers)
 
     def perform():
         if a.action in ('status', 'logs', 'preflight', 'rollback', 'nginx-log', 'alp'):
@@ -182,7 +208,7 @@ def main():
                 for src, dest in [('webapp/go/isureal','go/isureal'), ('webapp/sql/init.sh','sql/init.sh'), ('webapp/sql/reset.sql','sql/reset.sql'), ('revision','revision')]:
                     tar.add(work/src, arcname=dest)
             # Stage under a unique directory; the remote lock serializes activation.
-            for n in names:
+            def deploy_one_app(n):
                 stage = output(ssh + ['isucon@'+HOSTS[n], 'mktemp -d /home/isucon/.deploy-stage.XXXXXXXX'])
                 if not re.fullmatch(r'/home/isucon/\.deploy-stage\.[A-Za-z0-9]+', stage):
                     raise RuntimeError('unexpected stage path')
@@ -192,6 +218,7 @@ def main():
                 finally:
                     remote(n, 'rm -rf -- ' + shlex.quote(stage))
                 print(n + ': deployed ' + rev, flush=True)
+            run_hosts(names, deploy_one_app, workers)
             if a.action == 'regional-deploy':
                 deploy_nginx(work, rev)
 
