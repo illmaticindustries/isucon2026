@@ -34,6 +34,7 @@ func deleteAccountHandler(h *HandlerContext) echo.HandlerFunc {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+		invalidateCachedSessionsForUser(userID)
 		return c.NoContent(http.StatusNoContent)
 	}
 }

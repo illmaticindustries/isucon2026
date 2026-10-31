@@ -46,6 +46,16 @@ func getSessionFromHeader(c *echo.Context, db *sqlx.DB) (*Session, error) {
 
 	tokenHashBytes := sha256.Sum256([]byte(token))
 	tokenHash := hex.EncodeToString(tokenHashBytes[:])
+	// Cache session reads for GET requests only. Every cross-process route
+	// (friend requests) is a POST, so a logout or deletion performed here can
+	// always be seen there; caching reads keeps "use the token after logout is
+	// 401" true on whichever host served the logout.
+	cacheable := c.Request().Method == http.MethodGet
+	if cacheable {
+		if session, ok := loadCachedSession(tokenHash); ok {
+			return session, nil
+		}
+	}
 	var session Session
 	err := db.GetContext(c.Request().Context(), &session, `
 		SELECT s.user_id, s.token_hash, s.created_at, u.region
@@ -58,6 +68,9 @@ func getSessionFromHeader(c *echo.Context, db *sqlx.DB) (*Session, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get session: %w", err)
+	}
+	if cacheable {
+		storeCachedSession(tokenHash, &session)
 	}
 	return &session, nil
 }
@@ -101,6 +114,7 @@ func InvalidateLoginSession(db *sqlx.DB, userID string, tokenHash string) error 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
+	invalidateCachedSessionsForUser(userID)
 
 	return nil
 }
