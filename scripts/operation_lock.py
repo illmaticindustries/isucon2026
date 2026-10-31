@@ -46,9 +46,10 @@ def reserve(kind, description):
     return token
 
 
-def rotate_nginx_logs():
-    # Start each benchmark with access logs that contain only its own requests.
+def reset_measurements():
+    # Start each benchmark with access logs and query stats that contain only its own load.
     subprocess.run([sys.executable, str(Path(__file__).with_name('deploy.py')), 'nginx-rotate', '--hosts', APP_HOSTS], check=True)
+    subprocess.run([sys.executable, str(Path(__file__).with_name('deploy.py')), 'pgstats-reset', '--hosts', 'asia2'], check=True)
 
 
 @contextlib.contextmanager
@@ -74,9 +75,9 @@ def main():
     if action == 'reserve':
         token = reserve('benchmark', os.environ.get('BENCH_NOTE', 'portal benchmark'))
         try:
-            rotate_nginx_logs()
+            reset_measurements()
         except BaseException:
-            print('nginx log rotation failed; reservation is retained. Check the app hosts, '
+            print('Log rotation or pg_stat_statements reset failed; reservation is retained. Check the hosts, '
                   'then release with OPERATION_TOKEN=' + token, file=sys.stderr)
             raise
         print('Reservation acquired. Enqueue once, record the job ID, and keep this reservation '

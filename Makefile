@@ -10,6 +10,7 @@ help:
 	@echo 'make deploy-indexes | verify-indexes REF=<pushed commit> HOSTS=asia2'
 	@echo 'make nginx-deploy REF=<pushed commit> | alp-install | alp | nginx-log [HOSTS=...]'
 	@echo 'Mutations require PORTAL_IDLE=yes after checking the portal.'
+	@echo 'After Enqueue: make measure [MEASURE_SECONDS=60]'
 	@echo 'Before Enqueue: make bench-reserve PORTAL_IDLE=yes; after completion: make bench-release PORTAL_IDLE=yes OPERATION_TOKEN=<token>'
 
 build deploy preflight rollback status logs deploy-indexes verify-indexes nginx-log alp nginx-deploy alp-install:
@@ -38,3 +39,9 @@ bench-release:
 
 operation-status:
 	python3 scripts/operation_lock.py status
+
+# Run right after Enqueue: top/pprof during load, then alp, logs and pg_stat_statements into measure/.
+export MEASURE_SECONDS ?= 60
+.PHONY: measure
+measure:
+	python3 scripts/measure.py
