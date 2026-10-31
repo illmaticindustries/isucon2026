@@ -42,15 +42,17 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 
 		ctx := c.Request().Context()
 		var metadata struct {
-			SecretKeyHash string    `db:"secret_key_hash"`
-			Generation    int64     `db:"generation"`
-			CreatedAt     time.Time `db:"created_at"`
+			SecretKeyHash   string       `db:"secret_key_hash"`
+			Generation      int64        `db:"generation"`
+			InitialBoundary sql.NullTime `db:"initial_boundary"`
+			CreatedAt       time.Time    `db:"created_at"`
 
 			MediaType string `db:"media_type"`
 			Valid     bool   `db:"valid"`
 		}
 		err = h.DB.GetContext(ctx, &metadata, `
-   SELECT u.secret_key_hash, g.generation, i.created_at, i.media_type,
+   SELECT u.secret_key_hash, g.generation, (SELECT created_at FROM initial_data_boundary) AS initial_boundary,
+     i.created_at, i.media_type,
      (COALESCE(u.profile_image_id = i.id, false)
       OR EXISTS (SELECT 1 FROM posts p WHERE p.image_id = i.id AND p.author_id = u.id AND p.deleted_at IS NULL)
       OR EXISTS (SELECT 1 FROM realmojis r
@@ -83,7 +85,7 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 		cacheKey := imageBodyKey{ID: input.ImageID, CreatedAt: metadata.CreatedAt, OwnerKey: metadata.SecretKeyHash}
 		fileKey := ""
 		if h.ImageFiles != nil && canAccelImage(c.Request()) {
-			fileKey = fileImageKey(cacheKey.ID, cacheKey.CreatedAt, metadata.MediaType, metadata.Generation)
+			fileKey = imageFileKey(cacheKey.ID, cacheKey.CreatedAt, metadata.MediaType, metadata.Generation, metadata.InitialBoundary)
 		}
 		serveFile := func() error {
 			if exp <= time.Now().Unix() {

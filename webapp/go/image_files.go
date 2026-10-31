@@ -3,6 +3,7 @@ package isureal
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"net/http"
@@ -30,6 +31,22 @@ type imageFileStore struct {
 }
 
 func fileImageKey(id string, created time.Time, mediaType string, epoch int64) string {
+	return fileImageKeyInGroup(id, created, mediaType, "g"+strconv.FormatInt(epoch, 10))
+}
+
+// imageFileKey keeps initial-data images out of the epoch groups. Initialize
+// never changes or deletes an image created at or before the boundary, so the
+// file stays identical to PostgreSQL across resets and later epochs reuse it.
+// The boundary is part of the group: reloading the dataset starts a new group.
+// Validity and signatures are still checked in PostgreSQL on every request.
+func imageFileKey(id string, created time.Time, mediaType string, epoch int64, initialBoundary sql.NullTime) string {
+	if initialBoundary.Valid && !created.After(initialBoundary.Time) {
+		return fileImageKeyInGroup(id, created, mediaType, "i"+strconv.FormatInt(initialBoundary.Time.UnixNano(), 10))
+	}
+	return fileImageKey(id, created, mediaType, epoch)
+}
+
+func fileImageKeyInGroup(id string, created time.Time, mediaType, group string) string {
 	var ext string
 	switch mediaType {
 	case "image/jpeg":
@@ -39,8 +56,6 @@ func fileImageKey(id string, created time.Time, mediaType string, epoch int64) s
 	default:
 		return ""
 	}
-	group := "g" + strconv.FormatInt(epoch, 10)
-
 	digest := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d", id, created.UnixNano())))
 	name := hex.EncodeToString(digest[:])
 	return group + "/" + name[:2] + "/" + name + ext
@@ -52,6 +67,18 @@ func (s *imageFileStore) exists(key string) bool {
 	}
 	info, err := os.Stat(filepath.Join(s.root, key))
 	return err == nil && info.Mode().IsRegular()
+}
+
+// read returns a cached file. Files are published by atomic rename, so a hit
+// always has the complete bytes; any error is a miss and the caller uses the DB.
+func (s *imageFileStore) read(key string) ([]byte, bool) {
+	if s == nil || key == "" {
+		return nil, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	body, err := os.ReadFile(filepath.Join(s.root, key))
+	return body, err == nil
 }
 
 func (s *imageFileStore) put(key string, epoch int64, body []byte) bool {
@@ -97,7 +124,8 @@ func (s *imageFileStore) put(key string, epoch int64, body []byte) bool {
 	return os.Rename(name, dest) == nil
 }
 
-// Only directories created for previous application epochs are removed. A failed
+// Only directories created for previous application epochs are removed; the
+// initial-data groups ("i...") are kept because reset never changes them. A failed
 // or interrupted fill cannot expose a partial file: writes use atomic rename.
 func (s *imageFileStore) reset(epoch int64) error {
 	if s == nil {
@@ -128,6 +156,36 @@ func (s *imageFileStore) reset(epoch int64) error {
 		}
 	}
 	return nil
+}
+
+type exportImageFile struct {
+	key  string
+	data []byte
+}
+
+// exportWarmer allows one background fill at a time; a busy fill drops the
+// next batch instead of queueing its bytes in memory.
+var exportWarmer = make(chan struct{}, 1)
+
+// warmExport stores images an export had to read from PostgreSQL, so the next
+// export or image request can use the files. It never delays the response.
+func (s *imageFileStore) warmExport(epoch int64, files []exportImageFile) {
+	if s == nil || len(files) == 0 {
+		return
+	}
+	select {
+	case exportWarmer <- struct{}{}:
+	default:
+		return
+	}
+	go func() {
+		defer func() { <-exportWarmer }()
+		for _, f := range files {
+			if !s.put(f.key, epoch, f.data) {
+				return
+			}
+		}
+	}()
 }
 
 // For conditional and range requests, retain the application's existing HTTP

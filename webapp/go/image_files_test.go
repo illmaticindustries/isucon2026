@@ -3,6 +3,7 @@ package isureal
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -47,6 +48,36 @@ func TestImageFileEpoch(t *testing.T) {
 	}
 }
 
+// Initial-data images live outside the epoch groups and survive initialize.
+func TestInitialImageFilesSurviveReset(t *testing.T) {
+	s := &imageFileStore{root: t.TempDir()}
+	boundary := sql.NullTime{Time: time.Date(2026, 10, 28, 1, 36, 31, 9580000, time.UTC), Valid: true}
+	initial := imageFileKey("old", boundary.Time, "image/jpeg", 10, boundary)
+	later := imageFileKey("new", boundary.Time.Add(time.Microsecond), "image/jpeg", 10, boundary)
+	if initial == "" || !strings.HasPrefix(initial, "i") || later != fileImageKey("new", boundary.Time.Add(time.Microsecond), "image/jpeg", 10) {
+		t.Fatalf("unexpected groups %q %q", initial, later)
+	}
+	if k := imageFileKey("old", boundary.Time, "image/jpeg", 10, sql.NullTime{}); k != fileImageKey("old", boundary.Time, "image/jpeg", 10) {
+		t.Fatal("missing boundary must fall back to the epoch group")
+	}
+	reloaded := sql.NullTime{Time: boundary.Time.Add(time.Hour), Valid: true}
+	if imageFileKey("old", boundary.Time, "image/jpeg", 10, reloaded) == initial {
+		t.Fatal("a reloaded dataset reused the previous initial group")
+	}
+	if !s.put(initial, 10, []byte("initial")) || !s.put(later, 10, []byte("later")) {
+		t.Fatal("put failed")
+	}
+	if err := s.reset(11); err != nil {
+		t.Fatal(err)
+	}
+	if body, ok := s.read(initial); !ok || string(body) != "initial" {
+		t.Fatal("initial image file was removed by initialize")
+	}
+	if s.exists(later) {
+		t.Fatal("benchmark image file survived initialize")
+	}
+}
+
 // Use the actual three nginx site configurations and the actual Go handler.
 // Replace only listen/upstream addresses, filesystem paths and the peer ACL
 // with loopback test fixtures. PostgreSQL tables are all connection-local TEMP.
@@ -68,6 +99,7 @@ func TestRegionalImageNginx(t *testing.T) {
 	db.SetMaxIdleConns(1)
 	db.MustExec(`CREATE TEMP TABLE image_objects(id text, owner_user_id text, data bytea, media_type text, created_at timestamptz);
  CREATE TEMP TABLE image_cache_generation(generation bigint); INSERT INTO image_cache_generation VALUES(321);
+ CREATE TEMP TABLE initial_data_boundary(created_at timestamptz); INSERT INTO initial_data_boundary VALUES('2026-10-28 01:36:31.00958+00');
  CREATE TEMP TABLE users(id text,status text,secret_key_hash text,profile_image_id text);
  CREATE TEMP TABLE posts(id text,image_id text,author_id text,deleted_at timestamptz);
  CREATE TEMP TABLE realmojis(image_id text,post_id text,reactor_id text,replaced_at timestamptz,deleted_at timestamptz)`)
