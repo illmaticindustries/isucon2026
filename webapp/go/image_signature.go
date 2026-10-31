@@ -44,30 +44,48 @@ type signatureCacheKey struct {
 	exp     int64
 }
 
-const signatureCacheLimit = 1 << 16
+const signatureCacheLimit = 1 << 17
 
+// signatureCache keeps the current and the previous generation of signatures so
+// that overflow drops the older half instead of clearing everything. With a
+// single map, reaching the limit wiped the whole cache; when the signed working
+// set exceeds the limit this thrashes and the cache effectively never hits
+// (observed via pprof: imageSignature was dominated by computeImageSignature).
 var signatureCache = struct {
 	sync.Mutex
-	values map[signatureCacheKey][sha256.Size]byte
-}{values: make(map[signatureCacheKey][sha256.Size]byte)}
+	current  map[signatureCacheKey][sha256.Size]byte
+	previous map[signatureCacheKey][sha256.Size]byte
+}{current: make(map[signatureCacheKey][sha256.Size]byte)}
+
+func loadImageSignature(cacheKey signatureCacheKey) ([sha256.Size]byte, bool) {
+	signatureCache.Lock()
+	defer signatureCache.Unlock()
+	if value, ok := signatureCache.current[cacheKey]; ok {
+		return value, true
+	}
+	value, ok := signatureCache.previous[cacheKey]
+	return value, ok
+}
+
+func storeImageSignature(cacheKey signatureCacheKey, value [sha256.Size]byte) {
+	signatureCache.Lock()
+	defer signatureCache.Unlock()
+	if len(signatureCache.current) >= signatureCacheLimit {
+		signatureCache.previous = signatureCache.current
+		signatureCache.current = make(map[signatureCacheKey][sha256.Size]byte)
+	}
+	signatureCache.current[cacheKey] = value
+}
 
 func imageSignature(key []byte, imageID string, exp int64) []byte {
 	cacheKey := signatureCacheKey{key: string(key), imageID: imageID, exp: exp}
-	signatureCache.Lock()
-	cached, ok := signatureCache.values[cacheKey]
-	signatureCache.Unlock()
-	if ok {
+	if cached, ok := loadImageSignature(cacheKey); ok {
 		return cached[:]
 	}
 	value := computeImageSignature(key, imageID, exp)
 	var stored [sha256.Size]byte
 	copy(stored[:], value)
-	signatureCache.Lock()
-	if len(signatureCache.values) >= signatureCacheLimit {
-		clear(signatureCache.values)
-	}
-	signatureCache.values[cacheKey] = stored
-	signatureCache.Unlock()
+	storeImageSignature(cacheKey, stored)
 	return value
 }
 
