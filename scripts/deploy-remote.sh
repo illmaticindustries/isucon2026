@@ -104,23 +104,42 @@ postgres)
         done
         return 1
     }
-    backup=$(mktemp -d "$state/postgres-backup.XXXXXXXX")
-    if test -f "$pgconf/tuning.conf"; then cp -p "$pgconf/tuning.conf" "$backup/tuning.conf"; fi
-    sudo -n install -o postgres -g postgres -m 644 "$stage/postgres/tuning.conf" "$pgconf/tuning.conf"
-    # PostgreSQL refuses to start on an invalid setting; put the previous file back and start again.
-    if ! sudo -n systemctl restart postgresql@16-main || ! pg_ready; then
+    psql_at() { sudo -n -u postgres psql -X -At -c "$1"; }
+    restore() {
         if test -f "$backup/tuning.conf"; then
             sudo -n install -o postgres -g postgres -m 644 "$backup/tuning.conf" "$pgconf/tuning.conf"
         else
             sudo -n rm -f "$pgconf/tuning.conf"
         fi
-        sudo -n systemctl restart postgresql@16-main
-        pg_ready || echo 'ROLLBACK FAILED: PostgreSQL is not ready; operator action required' >&2
-        echo "PostgreSQL did not start with the new settings; restored $backup" >&2
+    }
+    backup=$(mktemp -d "$state/postgres-backup.XXXXXXXX")
+    if test -f "$pgconf/tuning.conf"; then cp -p "$pgconf/tuning.conf" "$backup/tuning.conf"; fi
+    sudo -n install -o postgres -g postgres -m 644 "$stage/postgres/tuning.conf" "$pgconf/tuning.conf"
+    # pg_file_settings parses the files on disk, so invalid values are caught before they are applied.
+    if [ "$(psql_at "SELECT count(*) FROM pg_file_settings WHERE error IS NOT NULL")" != 0 ]; then
+        psql_at "SELECT sourcefile || ':' || sourceline || ' ' || name || ': ' || error FROM pg_file_settings WHERE error IS NOT NULL" >&2
+        restore
+        echo "Invalid settings; restored $backup without reloading" >&2
         exit 1
     fi
-    sudo -n -u postgres psql -X -At -c "SELECT name || ' = ' || setting || coalesce(' ' || unit, '') FROM pg_settings WHERE sourcefile LIKE '%/tuning.conf' ORDER BY name"
-    echo "PostgreSQL restarted; previous config in $backup"
+    sudo -n systemctl reload postgresql@16-main
+    # Restart only for postmaster settings (e.g. shared_buffers) so the buffer cache stays warm otherwise.
+    if [ "$(psql_at "SELECT count(*) FROM pg_settings WHERE pending_restart")" != 0 ]; then
+        psql_at "SELECT 'restart required: ' || name FROM pg_settings WHERE pending_restart"
+        # PostgreSQL refuses to start on an invalid setting; put the previous file back and start again.
+        if ! sudo -n systemctl restart postgresql@16-main || ! pg_ready; then
+            restore
+            sudo -n systemctl restart postgresql@16-main
+            pg_ready || echo 'ROLLBACK FAILED: PostgreSQL is not ready; operator action required' >&2
+            echo "PostgreSQL did not start with the new settings; restored $backup" >&2
+            exit 1
+        fi
+        action=restarted
+    else
+        action=reloaded
+    fi
+    psql_at "SELECT name || ' = ' || setting || coalesce(' ' || unit, '') FROM pg_settings WHERE sourcefile LIKE '%/tuning.conf' ORDER BY name"
+    echo "PostgreSQL $action; previous config in $backup"
     ;;
 *) echo 'Expected deploy, rollback, nginx or postgres' >&2; exit 2 ;;
 esac
