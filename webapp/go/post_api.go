@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"strings"
 	"time"
 
 	"example.com/isureal-company/isureal/internal/jpegvalidate"
@@ -92,68 +93,76 @@ func createPostHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		defer tx.Rollback()
-		var lockedUserID string
-		if err := tx.GetContext(ctx, &lockedUserID, `SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE`, userID); err != nil {
+		// Acquire the author lock in its own statement. A writer that waited
+		// for another post must check the slot using a newer READ COMMITTED snapshot.
+		var user User
+		if err := tx.GetContext(ctx, &user, `SELECT `+strings.Join(userColumns, ", ")+`
+            FROM users WHERE id=$1 AND status='active' FOR NO KEY UPDATE`, userID); err != nil {
 			return err
 		}
-		user, err := getUser(ctx, tx, userID)
-		if err != nil {
+		if err := user.setImageKey(); err != nil {
 			return err
 		}
+
 		var window struct {
-			ID        string    `db:"id"`
-			LocalDate time.Time `db:"local_date"`
-			StartsAt  time.Time `db:"starts_at"`
+			ID             string    `db:"id"`
+			StartsAt       time.Time `db:"starts_at"`
+			OnTimeDeadline time.Time `db:"on_time_deadline"`
+			Active         int       `db:"active"`
+			Deleted        int       `db:"deleted"`
 		}
-		// Concurrent users may post in the same window. SHARE still blocks the
-		// ended_at UPDATE until this post commits; the user lock above serializes
-		// duplicate posts and deletion-limit checks for the same user.
-		err = tx.GetContext(ctx, &window, `SELECT id, local_date, starts_at FROM posting_windows WHERE region = $1 AND ended_at IS NULL FOR SHARE`, user.Region)
+		// Lock just the open window, so it cannot close during insertion.
+		// The slot belongs to a local date even if the author changed regions.
+		err = tx.GetContext(ctx, &window, `
+            SELECT w.id, w.starts_at, w.on_time_deadline, slots.active, slots.deleted
+            FROM posting_windows w
+            CROSS JOIN LATERAL (
+                SELECT count(*) FILTER (WHERE p.deleted_at IS NULL) AS active,
+                       count(*) FILTER (WHERE p.deleted_at IS NOT NULL) AS deleted
+                FROM posts p JOIN posting_windows prior ON prior.id = p.posting_window_id
+                WHERE p.author_id = $1 AND prior.local_date = w.local_date
+            ) slots
+            WHERE w.region = $2 AND w.ended_at IS NULL FOR SHARE OF w`, userID, user.Region)
+		if errors.Is(err, sql.ErrNoRows) {
+			return NewAPIError(http.StatusConflict, "post_slot_unavailable")
+		}
 		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return NewAPIError(http.StatusConflict, "post_slot_unavailable")
-			}
-			return err
-		}
-		var counts struct {
-			Active  int `db:"active"`
-			Deleted int `db:"deleted"`
-		}
-		if err := tx.GetContext(ctx, &counts, `
-   SELECT count(*) FILTER (WHERE deleted_at IS NULL) AS active,
-          count(*) FILTER (WHERE deleted_at IS NOT NULL) AS deleted
-   FROM posts p JOIN posting_windows w ON w.id = p.posting_window_id
-   WHERE p.author_id = $1 AND w.local_date = $2
-  `, userID, window.LocalDate); err != nil {
 			return err
 		}
 		postedAt := time.Now().UTC()
-		if counts.Active != 0 || counts.Deleted >= 2 || postedAt.Before(window.StartsAt) {
+		if window.Active != 0 || window.Deleted >= 2 || postedAt.Before(window.StartsAt) {
 			return NewAPIError(http.StatusConflict, "post_slot_unavailable")
 		}
-		imageID := uuid.NewString()
-		written, err := insertJPEG(ctx, tx, imageID, userID, imageData, &postedAt)
+
+		var stored struct {
+			Post
+			Generation int64 `db:"generation"`
+		}
+		// Pass the exact stored image timestamp through RETURNING; it is also
+		// the partition key used by exports and the nginx file cache.
+		err = tx.GetContext(ctx, &stored, `
+            WITH image AS (
+                INSERT INTO image_objects(id,owner_user_id,data,media_type,created_at)
+                VALUES ($4,$2,$12,'image/jpeg',$11)
+                RETURNING id,created_at
+            )
+            INSERT INTO posts (id,author_id,posting_window_id,image_id,caption,visibility,
+                               location_kind,latitude,longitude,locality,posted_at)
+            SELECT $1,$2,$3,image.id,$5,$6,$7,$8,$9,$10,image.created_at FROM image
+            RETURNING id,author_id,posting_window_id,image_id,caption,visibility,
+                      location_kind,latitude,longitude,locality,posted_at,
+                      (SELECT generation FROM image_cache_generation) AS generation`,
+			uuid.NewString(), userID, window.ID, uuid.NewString(), input.Caption, input.Visibility,
+			location.Kind, location.Latitude, location.Longitude, location.Locality, postedAt, imageData)
 		if err != nil {
 			return err
 		}
-		postID := uuid.NewString()
-		if _, err := tx.ExecContext(ctx, `
-   INSERT INTO posts (id, author_id, posting_window_id, image_id, caption, visibility,
-                      location_kind, latitude, longitude, locality, posted_at)
-   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-  `, postID, userID, window.ID, imageID, input.Caption, input.Visibility,
-			location.Kind, location.Latitude, location.Longitude, location.Locality, postedAt); err != nil {
-			return err
-		}
-		post, err := getPost(ctx, tx, postID)
-		if err != nil {
-			return err
-		}
+		stored.OnTimeDeadline = window.OnTimeDeadline
 		if err := tx.Commit(); err != nil {
 			return err
 		}
-		h.ImageFiles.warmJPEG(written, imageID, imageData)
-		return c.JSON(http.StatusCreated, newPostResponse(post, user))
+		h.ImageFiles.warmJPEG(insertedImage{CreatedAt: stored.PostedAt, Generation: stored.Generation}, stored.ImageID, imageData)
+		return c.JSON(http.StatusCreated, newPostResponse(stored.Post, user))
 	}
 }
 
