@@ -23,6 +23,7 @@ type searchTestState struct {
 	blocked       map[string]bool
 	rows          int
 	queries       int
+	fetches       int
 	reads, closes int
 	failRead      bool
 }
@@ -37,7 +38,18 @@ func (searchTestDriver) Open(string) (driver.Conn, error) {
 }
 func (c *searchTestConn) Prepare(string) (driver.Stmt, error) { return nil, fmt.Errorf("unsupported") }
 func (c *searchTestConn) Close() error                        { return nil }
-func (c *searchTestConn) Begin() (driver.Tx, error)           { return nil, fmt.Errorf("unsupported") }
+func (c *searchTestConn) Begin() (driver.Tx, error)           { return searchTestTx{}, nil }
+func (c *searchTestConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	return searchTestTx{}, nil
+}
+
+// Accept []string for "id = ANY($1)" as pgx/stdlib does.
+func (c *searchTestConn) CheckNamedValue(*driver.NamedValue) error { return nil }
+
+type searchTestTx struct{}
+
+func (searchTestTx) Commit() error   { return nil }
+func (searchTestTx) Rollback() error { return nil }
 
 type searchTestRows struct {
 	notificationRows
@@ -64,9 +76,23 @@ func (c *searchTestConn) QueryContext(_ context.Context, q string, args []driver
 		}
 		return r, nil
 	}
+	if strings.Contains(q, "id = ANY($1)") {
+		s.fetches++
+		ids := args[0].Value.([]string)
+		r := &notificationRows{columns: userColumns}
+		// Return rows in reverse so the handler must restore the scan order.
+		for i := len(ids) - 1; i >= 0; i-- {
+			for _, u := range s.users {
+				if u.ID == ids[i] {
+					r.values = append(r.values, []driver.Value{u.ID, u.Username, u.SecretKeyHash, u.DisplayName, u.Bio, nil, u.Region, u.AccountType, u.Status})
+				}
+			}
+		}
+		return r, nil
+	}
 	s.queries++
-	r := &notificationRows{columns: userColumns}
-	if !strings.Contains(q, "ORDER BY username, id") {
+	r := &notificationRows{columns: []string{"id", "username", "display_name"}}
+	if !strings.Contains(q, "SELECT id, username, display_name FROM users") || !strings.Contains(q, "ORDER BY username, id") {
 		return nil, fmt.Errorf("unexpected query: %s", q)
 	}
 	cursor, id := args[1].Value.(string), args[2].Value.(string)
@@ -74,10 +100,7 @@ func (c *searchTestConn) QueryContext(_ context.Context, q string, args []driver
 		if u.Status != "active" || u.ID == args[0].Value || (cursor != "" && (u.Username < cursor || (u.Username == cursor && u.ID <= id))) {
 			continue
 		}
-		r.values = append(r.values, []driver.Value{u.ID, u.Username, u.SecretKeyHash, u.DisplayName, u.Bio, nil, u.Region, u.AccountType, u.Status})
-		if strings.Contains(q, "LIMIT 200") && len(r.values) == 200 {
-			break
-		}
+		r.values = append(r.values, []driver.Value{u.ID, u.Username, u.DisplayName})
 	}
 	s.rows += len(r.values)
 	return &searchTestRows{*r, s}, nil
@@ -169,7 +192,10 @@ func TestSearchPaginationMatchesFullScan(t *testing.T) {
 					t.Fatalf("got %v want %v", actual, expected)
 				}
 				if s.queries != pages {
-					t.Fatalf("%d SQL queries for %d pages", s.queries, pages)
+					t.Fatalf("%d scan queries for %d pages", s.queries, pages)
+				}
+				if s.fetches > pages {
+					t.Fatalf("%d row fetches for %d pages", s.fetches, pages)
 				}
 			})
 		}
