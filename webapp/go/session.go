@@ -3,9 +3,7 @@ package isureal
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -32,7 +30,7 @@ func GetSession(c *echo.Context) *Session {
 	return sess
 }
 
-func getSessionFromHeader(c *echo.Context, db *sqlx.DB) (*Session, error) {
+func (h *HandlerContext) getSessionFromHeader(c *echo.Context) (*Session, error) {
 	authHeader := c.Request().Header.Get(echo.HeaderAuthorization)
 	if authHeader == "" {
 		return nil, nil
@@ -46,38 +44,38 @@ func getSessionFromHeader(c *echo.Context, db *sqlx.DB) (*Session, error) {
 
 	tokenHashBytes := sha256.Sum256([]byte(token))
 	tokenHash := hex.EncodeToString(tokenHashBytes[:])
-	// Cache session reads for every in-region route. Routes nginx forwards to
-	// another region's listener still read the database, so a logout, deletion
-	// or region change made here is observed there within the same request.
-	cacheable := sessionCacheable(c)
-	if cacheable {
-		if session, ok := loadCachedSession(tokenHash); ok {
-			return session, nil
-		}
-	}
-	var session Session
-	err := db.GetContext(c.Request().Context(), &session, `
+	return h.sessionReads.lookup(c.Request().Context(), tokenHash, time.Millisecond, h.readSessions)
+}
+
+func (h *HandlerContext) readSessions(ctx context.Context, hashes []string) ([]*Session, error) {
+	var rows []Session
+	err := h.DB.SelectContext(ctx, &rows, `
 		SELECT s.user_id, s.token_hash, s.created_at, u.region
 		FROM login_sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.token_hash = $1
+		WHERE s.token_hash = ANY($1::text[])
 		  AND s.active = true AND u.status = 'active'
-	`, tokenHash)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
+	`, hashes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get session: %w", err)
 	}
-	if cacheable {
-		storeCachedSession(tokenHash, &session)
+	byHash := make(map[string]*Session, len(rows))
+	for i := range rows {
+		byHash[rows[i].TokenHash] = &rows[i]
 	}
-	return &session, nil
+	result := make([]*Session, len(hashes))
+	for i, hash := range hashes {
+		if session := byHash[hash]; session != nil {
+			copy := *session
+			result[i] = &copy
+		}
+	}
+	return result, nil
 }
 
 func SessionMiddleware(handlerContext *HandlerContext, authRequired bool) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
-			session, err := getSessionFromHeader(c, handlerContext.DB)
+			session, err := handlerContext.getSessionFromHeader(c)
 			if err != nil {
 				return err
 			}
@@ -113,7 +111,6 @@ func InvalidateLoginSession(db *sqlx.DB, userID string, tokenHash string) error 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
-	invalidateCachedSessionsForUser(userID)
 
 	return nil
 }

@@ -93,6 +93,13 @@ func ActionLogMiddleware(minLevel string, output io.Writer) echo.MiddlewareFunc 
 			}
 			if session := GetSession(c); session != nil {
 				entry["user_id"] = session.UserID
+				entry["region"] = session.Region
+			}
+			if action == "get_feed" {
+				switch feed := c.Param("feed"); feed {
+				case "friends", "friends-of-friends", "following", "public":
+					entry["feed"] = feed
+				}
 			}
 			if action == "login" || action == "register" {
 				entry["username"] = nil

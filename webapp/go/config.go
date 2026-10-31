@@ -15,6 +15,10 @@ type Config struct {
 	DBName     string
 	LogLevel   string
 	ImageFiles *imageFileStore
+	// Forwarded marks a listener that serves another region's requests relayed
+	// by that region's nginx. Logins, logouts and deletions for that region run
+	// in a different process, so this listener must not cache sessions.
+	Forwarded bool
 }
 
 func ConfigFromEnv() *Config {

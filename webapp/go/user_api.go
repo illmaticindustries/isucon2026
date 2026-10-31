@@ -150,7 +150,6 @@ func loginHandler(h *HandlerContext) echo.HandlerFunc {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
-		invalidateCachedSessionsForUser(user.ID)
 		return c.JSON(http.StatusOK, loginResponse{Token: session.Token, User: newSessionUserResponse(user)})
 	}
 }
@@ -234,9 +233,6 @@ func updateMeHandler(h *HandlerContext) echo.HandlerFunc {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
-		// The session carries the region; a profile/region change must not be
-		// shadowed by a cached read.
-		invalidateCachedSessionsForUser(session.UserID)
 		return c.JSON(http.StatusOK, updateMeResponse(newGetMeResponse(user)))
 	}
 }

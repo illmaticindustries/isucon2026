@@ -118,15 +118,12 @@ func TestRegionalImageNginx(t *testing.T) {
 		defer server.Close()
 		regional := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-Test-Backend", fmt.Sprintf("regional-%d", region))
-			wantMethod := http.MethodPost
-			if r.URL.Path == "/api/users" {
-				wantMethod = http.MethodGet
-			}
+			w.Header().Set("X-Test-Method", r.Method)
 			if r.URL.Path == "/api/users" && r.URL.Query().Get("q") != "coffee" {
 				http.Error(w, "query lost", 400)
 				return
 			}
-			if r.Method != wantMethod || r.Header.Get("Authorization") != "Bearer test" {
+			if r.Header.Get("Authorization") != "Bearer test" {
 				http.Error(w, "unexpected request", 400)
 			}
 		}))
@@ -238,13 +235,49 @@ func TestRegionalImageNginx(t *testing.T) {
 	for region := range 3 {
 		get(region, signed(exp), nil, 403)
 	}
+	routes := []struct {
+		method, path string
+		forwarded    bool
+	}{
+		{http.MethodPost, "/api/friend-requests", true},
+		{http.MethodPost, "/api/friend-requests/id/accept", true},
+		{http.MethodPost, "/api/friend-requests/id/reject", true},
+		{http.MethodPost, "/api/friend-requests/id/cancel", true},
+		{http.MethodPost, "/api/posts", true},
+		{http.MethodGet, "/api/users?q=coffee", true},
+		{http.MethodGet, "/api/posts/id", true},
+		{http.MethodPatch, "/api/posts/id", true},
+		{http.MethodDelete, "/api/posts/id", true},
+		{http.MethodPost, "/api/posts/id/comments", true},
+		{http.MethodGet, "/api/posts/id/comments", true},
+		{http.MethodPost, "/api/posts/id/realmojis", true},
+		{http.MethodGet, "/api/posts/id/realmojis", true},
+		{http.MethodDelete, "/api/comments/id", true},
+		{http.MethodDelete, "/api/realmojis/id", true},
+		{http.MethodPut, "/api/follows/id", true},
+		{http.MethodDelete, "/api/follows/id", true},
+		{http.MethodPut, "/api/blocks/id", true},
+		{http.MethodDelete, "/api/blocks/id", true},
+		{http.MethodDelete, "/api/friendships/id", true},
+		// Session changes must stay in the process whose cache they invalidate.
+		{http.MethodPost, "/api/auth/login", false},
+		{http.MethodPost, "/api/auth/logout", false},
+		{http.MethodPatch, "/api/me", false},
+		{http.MethodPost, "/api/me/account-deletion", false},
+		{http.MethodPut, "/api/me/profile-image", false},
+		{http.MethodGet, "/api/posts/me/current", false},
+		{http.MethodGet, "/api/posting-window/current", false},
+		{http.MethodGet, "/api/feeds/friends", false},
+		{http.MethodGet, "/api/users/id", false},
+		{http.MethodGet, "/api/relationships/friends", false},
+		{http.MethodPost, "/api/friend-requests-other", false},
+		{http.MethodGet, "/api/posts/id/other", false},
+		{http.MethodGet, "/api/comments/id/other", false},
+	}
 	for _, region := range []int{1, 2} {
-		for _, path := range []string{"/api/friend-requests", "/api/friend-requests/id/accept", "/api/friend-requests/id/reject", "/api/friend-requests/id/cancel", "/api/friend-requests-other", "/api/relationships/friends", "/api/posts", "/api/users?q=coffee", "/api/posts/id", "/api/users/id"} {
-			method := http.MethodPost
-			if strings.HasPrefix(path, "/api/users") {
-				method = http.MethodGet
-			}
-			req, err := http.NewRequest(method, "http://127.0.0.1:"+ports[region]+path, nil)
+		for _, route := range routes {
+			path := route.path
+			req, err := http.NewRequest(route.method, "http://127.0.0.1:"+ports[region]+path, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -255,10 +288,10 @@ func TestRegionalImageNginx(t *testing.T) {
 			}
 			resp.Body.Close()
 			want := fmt.Sprintf("local-%d", region)
-			if path == "/api/posts" || path == "/api/users?q=coffee" || path == "/api/friend-requests" || strings.HasPrefix(path, "/api/friend-requests/id/") {
+			if route.forwarded {
 				want = fmt.Sprintf("regional-%d", region)
-				if resp.StatusCode != 200 {
-					t.Errorf("%s: status %d", path, resp.StatusCode)
+				if resp.StatusCode != 200 || resp.Header.Get("X-Test-Method") != route.method {
+					t.Errorf("%s %s: status %d method %q", route.method, path, resp.StatusCode, resp.Header.Get("X-Test-Method"))
 				}
 			}
 			if got := resp.Header.Get("X-Test-Backend"); got != want {
