@@ -57,7 +57,7 @@ func isolatedWriteTestDB(t *testing.T) *sqlx.DB {
 // locks, the partitioned image table, and the HTTP handler together.
 func TestPostSlotAfterLockWait(t *testing.T) {
 	db := isolatedWriteTestDB(t)
-	for _, file := range []string{"001-schema.sql", "005-image-cache.sql"} {
+	for _, file := range []string{"001-schema.sql", "005-image-cache.sql", "011-regional-post-photos.sql"} {
 		contents, err := os.ReadFile(filepath.Join("../sql", file))
 		if err != nil {
 			t.Fatal(err)

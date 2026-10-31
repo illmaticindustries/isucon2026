@@ -95,6 +95,14 @@ func ActionLogMiddleware(minLevel string, output io.Writer) echo.MiddlewareFunc 
 				entry["user_id"] = session.UserID
 				entry["region"] = session.Region
 			}
+			if action == "create_post" && status == http.StatusCreated {
+				entry["photo_bytes"] = c.Get("post_photo_bytes")
+				origin, _ := c.Get("post_photo_origin").(string)
+				if origin == "" {
+					origin = "database"
+				}
+				entry["photo_origin"] = origin
+			}
 			if action == "get_feed" {
 				switch feed := c.Param("feed"); feed {
 				case "friends", "friends-of-friends", "following", "public":

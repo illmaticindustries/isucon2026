@@ -1,6 +1,7 @@
 package isureal
 
 import (
+	"context"
 	"os"
 	"time"
 
@@ -16,6 +17,7 @@ type HandlerContext struct {
 	Config       *Config
 	IPBans       *IPBanList
 	ImageFiles   *imageFileStore
+	Photos       *regionalPhotoStore
 	sessionReads readBatch[string, *Session]
 }
 
@@ -64,6 +66,11 @@ func NewServerWithDB(config *Config, db *sqlx.DB) *echo.Echo {
 	if !validRegion(config.Region) {
 		panic("invalid server region: " + config.Region)
 	}
+	if config.Photos != nil {
+		if err := config.Photos.loadKey(context.Background(), db); err != nil {
+			panic("could not load regional photo peer key: " + err.Error())
+		}
+	}
 	e := echo.New()
 	e.JSONSerializer = fastJSONSerializer{}
 	e.IPExtractor = extractClientIP
@@ -79,9 +86,14 @@ func NewServerWithDB(config *Config, db *sqlx.DB) *echo.Echo {
 		Config:     config,
 		IPBans:     &IPBanList{},
 		ImageFiles: config.ImageFiles,
+		Photos:     config.Photos,
 	}
 	e.Use(IPBanMiddleware(handlerContext))
 
+	if config.Photos != nil && !config.Forwarded {
+		e.GET(privatePhotoPath+"*", config.Photos.serve)
+		e.POST(privatePhotoPath+":region/prune", config.Photos.cleanupHandler(db))
+	}
 	e.POST("/api/initialize", initializeHandler(handlerContext))
 	e.POST("/api/auth/register", registerHandler(handlerContext))
 	e.POST("/api/auth/login", loginHandler(handlerContext))

@@ -60,7 +60,7 @@ def ensure_app_schema(work, remote):
     before activating any application host. Older REFs need no new tables.
     """
     command = '. /home/isucon/env.sh; export PGPASSWORD="$ISUREAL_DB_PASSWORD"; exec psql -X --no-password -v ON_ERROR_STOP=1 -h "$ISUREAL_DB_HOST" -p "$ISUREAL_DB_PORT" -U "$ISUREAL_DB_USER" -d "$ISUREAL_DB_NAME"'
-    for name in ('005-image-cache.sql', '006-notification-batches.sql', '007-user-search.sql', '009-image-storage-external.sql'):
+    for name in ('005-image-cache.sql', '006-notification-batches.sql', '007-user-search.sql', '009-image-storage-external.sql', '011-regional-post-photos.sql'):
         path = work / 'webapp/sql' / name
         if path.exists():
             print('asia2: required application schema ' + name, flush=True)
@@ -69,7 +69,7 @@ def ensure_app_schema(work, remote):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('action', choices=['regional-deploy', 'build', 'deploy', 'preflight', 'rollback', 'status', 'logs', 'deploy-indexes', 'verify-indexes', 'nginx-log', 'alp', 'enable-pgstats', 'alp-install', 'nginx-deploy', 'nginx-rotate', 'pgstats-reset', 'pg-tune', 'deploy-cache-schema', 'deploy-notification-schema'])
+    p.add_argument('action', choices=['regional-photo-deploy', 'regional-photo-rollback', 'regional-deploy', 'build', 'deploy', 'preflight', 'rollback', 'status', 'logs', 'deploy-indexes', 'verify-indexes', 'nginx-log', 'alp', 'enable-pgstats', 'alp-install', 'nginx-deploy', 'nginx-rotate', 'pgstats-reset', 'pg-tune', 'deploy-cache-schema', 'deploy-notification-schema'])
     p.add_argument('--ref', default='HEAD')
     p.add_argument('--hosts', default='asia1 europe1 america1')
     a = p.parse_args()
@@ -87,12 +87,16 @@ def main():
         p.error('application actions cannot target the DB server asia2')
     if a.action in ('deploy-indexes', 'verify-indexes', 'enable-pgstats', 'pgstats-reset', 'pg-tune', 'deploy-cache-schema', 'deploy-notification-schema') and names != ['asia2']:
         p.error('DB operations require HOSTS=asia2')
-    if a.action == 'regional-deploy' and names != ['asia1', 'europe1', 'america1']:
-        p.error('regional-deploy requires HOSTS="asia1 europe1 america1" in that order')
+    photo_action = a.action in ('regional-photo-deploy', 'regional-photo-rollback')
+    expected = os.environ.get('EXPECT_REF', '')
+    if photo_action and not re.fullmatch('[0-9a-f]{40}', expected):
+        p.error('EXPECT_REF requires the full previously deployed SHA')
+    if (a.action == 'regional-deploy' or photo_action) and names != ['asia1', 'europe1', 'america1']:
+        p.error('regional deployment requires HOSTS="asia1 europe1 america1" in that order')
     ssh = ['ssh', *shlex.split(os.environ.get('SSH_OPTIONS', '-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes'))]
     def remote(name, command, **kwargs):
         return run(ssh + ['isucon@' + HOSTS[name], command], **kwargs)
-    def deploy_nginx(work, rev):
+    def deploy_nginx(work, rev, site_only=False):
         payload = work/'nginx.tar'
         with tarfile.open(payload, 'w') as tar:
             tar.add(work/'etc/nginx', arcname='nginx')
@@ -102,7 +106,8 @@ def main():
                 raise RuntimeError('unexpected stage path')
             try:
                 remote(n, 'cat > ' + stage + '/nginx.tar', input=payload.read_bytes())
-                remote(n, 'bash -s -- nginx ' + stage + ' ' + n, input=(work/'scripts/deploy-remote.sh').read_bytes())
+                mode = 'photo-nginx' if site_only else 'nginx'
+                remote(n, 'bash -s -- ' + mode + ' ' + stage + ' ' + n, input=(work/'scripts/deploy-remote.sh').read_bytes())
             finally:
                 remote(n, 'rm -rf -- ' + shlex.quote(stage))
             print(n + ': nginx config ' + rev, flush=True)
@@ -165,10 +170,42 @@ def main():
                 paths = ['etc/nginx'] if a.action == 'nginx-deploy' else ['webapp/go', 'webapp/sql', 'scripts/enable-pgstats.sh']
                 if a.action == 'pg-tune':
                     paths = ['etc/postgresql/16/main/conf.d/tuning.conf']
-                if a.action == 'regional-deploy':
+                if a.action == 'regional-deploy' or photo_action:
                     paths.append('etc/nginx')
                 run(['git', '-C', str(ROOT), 'archive', rev, *paths, 'scripts/deploy-remote.sh'], stdout=f)
             run(['tar', '-xf', str(archive), '-C', str(work)])
+            if photo_action:
+                if not (work/'webapp/sql/011-regional-post-photos.sql').is_file():
+                    p.error('REF must be the pushed regional photo candidate')
+                script = (work/'scripts/deploy-remote.sh').read_bytes()
+                db_cmd = ('. /home/isucon/env.sh; export PGPASSWORD="$ISUREAL_DB_PASSWORD"; '
+                          'exec psql -X -qAt --no-password -v ON_ERROR_STOP=1 -h "$ISUREAL_DB_HOST" '
+                          '-p "$ISUREAL_DB_PORT" -U "$ISUREAL_DB_USER" -d "$ISUREAL_DB_NAME"')
+                def photo_sql(sql):
+                    result = remote('asia2', 'bash -eu -c ' + shlex.quote(db_cmd), input=sql,
+                                    text=True, capture_output=True)
+                    return result.stdout.strip()
+                def photo_cli(name, action):
+                    command = ('set -a; . /home/isucon/env.sh; set +a; test "$ISUREAL_REGION" = ' + name[:-1] +
+                               '; exec /home/isucon/webapp/go/isureal ' + action)
+                    remote(name, 'bash -eu -c ' + shlex.quote(command))
+                if a.action == 'regional-photo-rollback':
+                    def check_restore_target(n):
+                        # Refuse to alter the gate if another session already replaced a host.
+                        command = ('set -eu; current=$(cat /home/isucon/webapp/.deploy-revision); '
+                                   'test "$current" = ' + rev + ' || test "$current" = ' + expected)
+                        remote(n, command)
+                    run_hosts(names, check_restore_target, workers)
+                    # Strongly gate and drain before even the first legacy reader starts.
+                    # A writer holding FOR SHARE has to commit before this UPDATE returns.
+                    if photo_sql("SELECT to_regclass('regional_post_photos') IS NOT NULL") == 't':
+                        photo_sql("UPDATE image_cache_generation SET regional_post_photos=false WHERE singleton")
+                        if photo_sql("SELECT EXISTS(SELECT FROM regional_post_photos)") == 't':
+                            run_hosts(names, lambda n: photo_cli(n, 'restore-regional-photos'), workers)
+                        if photo_sql("SELECT count(*) FROM regional_post_photos") != '0':
+                            raise RuntimeError('live regional photos still require compatible readers')
+                    run_hosts(names, lambda n: remote(n, 'bash -s -- photo-rollback ' + rev + ' ' + expected, input=script), workers)
+                    return
             if a.action == 'enable-pgstats':
                 remote('asia2', 'bash -s', input=(work/'scripts/enable-pgstats.sh').read_bytes())
                 return
@@ -206,6 +243,13 @@ def main():
             if a.action == 'build':
                 print('Pushed revision builds and tests successfully.')
                 return
+            if photo_action:
+                sites = {'asia1':'isureal.conf', 'europe1':'isureal-europe.conf', 'america1':'isureal-america.conf'}
+                def prepare_photo(name):
+                    site = sp.check_output(['git', 'show', expected + ':etc/nginx/sites-available/' + sites[name]], cwd=ROOT)
+                    command = 'bash -s -- photo-prepare ' + rev + ' ' + expected + ' ' + hashlib.sha256(site).hexdigest()
+                    remote(name, command, input=script)
+                run_hosts(names, prepare_photo, workers)
             ensure_app_schema(work, remote)
             payload = work/'payload.tar'
             (work/'revision').write_text(rev + '\n')
@@ -224,10 +268,16 @@ def main():
                     remote(n, 'rm -rf -- ' + shlex.quote(stage))
                 print(n + ': deployed ' + rev, flush=True)
             run_hosts(names, deploy_one_app, workers)
-            if a.action == 'regional-deploy':
-                deploy_nginx(work, rev)
+            if a.action == 'regional-deploy' or photo_action:
+                deploy_nginx(work, rev, site_only=photo_action)
+            if photo_action:
+                run_hosts(names, lambda n: photo_cli(n, 'check-regional-photos'), workers)
+                generation = photo_sql("UPDATE image_cache_generation SET regional_post_photos=true WHERE singleton RETURNING generation")
+                if not generation.isdigit():
+                    raise RuntimeError('regional photo enablement was not confirmed')
+                print('Regional photo storage enabled after three filesystem checks and six authenticated peer checks.')
 
-    if a.action in ('regional-deploy', 'deploy', 'rollback', 'deploy-indexes', 'enable-pgstats', 'nginx-deploy', 'alp-install', 'pg-tune', 'deploy-cache-schema', 'deploy-notification-schema'):
+    if photo_action or a.action in ('regional-deploy', 'deploy', 'rollback', 'deploy-indexes', 'enable-pgstats', 'nginx-deploy', 'alp-install', 'pg-tune', 'deploy-cache-schema', 'deploy-notification-schema'):
         with mutation(f'{a.action} ref={a.ref} hosts={a.hosts}'):
             perform()
     else:

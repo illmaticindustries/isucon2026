@@ -65,3 +65,12 @@ PR/mainでGo検証。main上の手動Deployワークフローも同じ `make pre
 ポータルの直接Enqueueや古いMakefile、手動SSH操作を技術的に遮断することはできない。チーム全員が予約手順と最新版Makefileを使うこと。ベンチ中の変更禁止はAGENTS.mdにも記載している。
 
 検索の007-user-search.sqlはusersに正規化値と元文字列の列を追加する。初回initialize時にGoと同じNFC/case-fold/NFCで補完し、登録・表示名変更では同じトランザクションで更新する。未補完・元文字列と不一致の行はSQLの絞込みを通し、従来のGo判定を行うため、旧バイナリへ戻して更新された行も取りこぼさない。再起動後はDB内の派生値を再利用する。ロールバック時に列を削除する必要はない。CIは一時PostgreSQL 16でUnicode・ページング・更新・旧実装による更新・冪等なスキーマ適用を検証する。ローカルでもISUREAL_TEST_DB_DSNを指定すると同じテストを実行できる（接続内のTEMPテーブルだけを使用）。
+
+### 投稿写真の地域保存を比較する場合
+
+候補ブランチのMakefileで操作する。3台とも同じ反映前SHAであることを確認し、その40桁を `EXPECT_REF` に指定する。各サイトの設定もそのSHAと比較し、不一致なら反映を中止する。nginx共通設定は対象外。DBのレプリカは不要。
+
+1. ポータルに未終了ジョブがなく、チームの作業が空いているときに `make regional-photo-deploy REF=<候補SHA> EXPECT_REF=<反映前SHA> PORTAL_IDLE=yes`。対象はasia1・europe1・america1と共有DBのasia2。アプリとサイト設定の実物を保存し、3台のアプリ・サイトを切り替える。写真の保存先は各アプリのEBSにある `/home/isucon/.isureal-post-originals`。ディスクへの永続書込みと、3台それぞれから他2台への認証付きHTTPが成功すると、DBの設定で地域保存が有効になる。
+2. ポータルを再確認し `make bench-reserve PORTAL_IDLE=yes`。予約取得後に1回Enqueueし、ジョブIDを記録する。終了後は未終了ジョブがないことを確認し、発行されたトークンで `make bench-release PORTAL_IDLE=yes OPERATION_TOKEN=<token>`。公式ログの各地域・1〜2日目の投稿後フィード検証と3〜4日目の参加人数を比較する。アプリの `create_post` の `photo_origin` で保存先、`photo_bytes` で元の写真サイズを確認できる。
+3. 復旧には `make regional-photo-rollback REF=<同じ候補SHA> EXPECT_REF=<同じ反映前SHA> PORTAL_IDLE=yes` を用いる。新規参照の作成を止め、各地域から全画像を従来のDB列へ戻す。残件ゼロを確認してから、退避したアプリ・サイト設定を復元する。追加スキーマは無効のまま残る。データが残る間は従来版を直接反映しない。
+4. 失敗・中断時は共有予約が残る。ポータルと全ホストの処理終了を確認してから自分のトークンで解除し、同じSHAを指定して復旧する。大会の終了時刻までに、必要な復旧と最後のPassed走行を完了できる時間を見込む。

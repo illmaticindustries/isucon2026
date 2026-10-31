@@ -243,7 +243,7 @@ func TestRegionalImageNginx(t *testing.T) {
 		{http.MethodPost, "/api/friend-requests/id/accept", true},
 		{http.MethodPost, "/api/friend-requests/id/reject", true},
 		{http.MethodPost, "/api/friend-requests/id/cancel", true},
-		{http.MethodPost, "/api/posts", true},
+		{http.MethodPost, "/api/posts", false},
 		{http.MethodGet, "/api/users?q=coffee", true},
 		{http.MethodGet, "/api/posts/id", true},
 		{http.MethodPatch, "/api/posts/id", true},

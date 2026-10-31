@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"database/sql"
 	"errors"
+	"github.com/jackc/pgx/v5/pgconn"
 	"io"
 	"mime/multipart"
 	"net/http"
-	"strings"
 	"time"
 
 	"example.com/isureal-company/isureal/internal/jpegvalidate"
@@ -88,81 +88,60 @@ func createPostHandler(h *HandlerContext) echo.HandlerFunc {
 
 		ctx := c.Request().Context()
 		userID := GetSession(c).UserID
-		tx, err := h.DB.BeginTxx(ctx, nil)
-		if err != nil {
-			return err
+		post := Post{ID: uuid.NewString(), ImageID: uuid.NewString(), AuthorID: userID, Caption: input.Caption, Visibility: input.Visibility, PostLocation: location}
+		var stored struct {
+			Author   User      `db:"author"`
+			WindowID string    `db:"window_id"`
+			At       time.Time `db:"at_time"`
+			Deadline time.Time `db:"deadline"`
+			Epoch    int64     `db:"epoch"`
 		}
-		defer tx.Rollback()
-		// Acquire the author lock in its own statement. A writer that waited
-		// for another post must check the slot using a newer READ COMMITTED snapshot.
-		var user User
-		if err := tx.GetContext(ctx, &user, `SELECT `+strings.Join(userColumns, ", ")+`
-            FROM users WHERE id=$1 AND status='active' FOR NO KEY UPDATE`, userID); err != nil {
-			return err
+		write := func(data []byte, region string, epoch int64) error {
+			return h.DB.GetContext(ctx, &stored, `SELECT x.window_id, x.at_time, x.deadline, x.epoch, `+userColumnsAs("u", "author")+`
+				FROM insert_regional_photo_post($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) x
+				CROSS JOIN LATERAL (SELECT (x.author_row).*) u`,
+				post.ID, post.ImageID, userID, input.Caption, input.Visibility, location.Kind, location.Latitude, location.Longitude, location.Locality, data, region, epoch)
 		}
-		if err := user.setImageKey(); err != nil {
-			return err
+		data := imageData
+		var ref photoRef
+		var epoch int64
+		if h.Photos != nil {
+			epoch, err = h.Photos.writeEpoch(ctx, h.DB)
+			if err != nil {
+				return err
+			}
+			if epoch >= 0 {
+				if staged, e := h.Photos.store(epoch, imageData); e == nil {
+					ref = staged
+					data = []byte(photoMagic + ref.path())
+				}
+			}
 		}
-
-		var window struct {
-			ID             string    `db:"id"`
-			StartsAt       time.Time `db:"starts_at"`
-			OnTimeDeadline time.Time `db:"on_time_deadline"`
-			Active         int       `db:"active"`
-			Deleted        int       `db:"deleted"`
+		err = write(data, ref.region, epoch)
+		var pgErr *pgconn.PgError
+		if ref.region != "" && errors.As(err, &pgErr) && pgErr.Code == "PZ001" {
+			// Reset or disablement won the lock. No row was written, so an inline retry is safe.
+			ref = photoRef{}
+			err = write(imageData, "", 0)
 		}
-		// Lock just the open window, so it cannot close during insertion.
-		// The slot belongs to a local date even if the author changed regions.
-		err = tx.GetContext(ctx, &window, `
-            SELECT w.id, w.starts_at, w.on_time_deadline, slots.active, slots.deleted
-            FROM posting_windows w
-            CROSS JOIN LATERAL (
-                SELECT count(*) FILTER (WHERE p.deleted_at IS NULL) AS active,
-                       count(*) FILTER (WHERE p.deleted_at IS NOT NULL) AS deleted
-                FROM posts p JOIN posting_windows prior ON prior.id = p.posting_window_id
-                WHERE p.author_id = $1 AND prior.local_date = w.local_date
-            ) slots
-            WHERE w.region = $2 AND w.ended_at IS NULL FOR SHARE OF w`, userID, user.Region)
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewAPIError(http.StatusConflict, "post_slot_unavailable")
 		}
 		if err != nil {
 			return err
 		}
-		postedAt := time.Now().UTC()
-		if window.Active != 0 || window.Deleted >= 2 || postedAt.Before(window.StartsAt) {
-			return NewAPIError(http.StatusConflict, "post_slot_unavailable")
-		}
-
-		var stored struct {
-			Post
-			Generation int64 `db:"generation"`
-		}
-		// Pass the exact stored image timestamp through RETURNING; it is also
-		// the partition key used by exports and the nginx file cache.
-		err = tx.GetContext(ctx, &stored, `
-            WITH image AS (
-                INSERT INTO image_objects(id,owner_user_id,data,media_type,created_at)
-                VALUES ($4,$2,$12,'image/jpeg',$11)
-                RETURNING id,created_at
-            )
-            INSERT INTO posts (id,author_id,posting_window_id,image_id,caption,visibility,
-                               location_kind,latitude,longitude,locality,posted_at)
-            SELECT $1,$2,$3,image.id,$5,$6,$7,$8,$9,$10,image.created_at FROM image
-            RETURNING id,author_id,posting_window_id,image_id,caption,visibility,
-                      location_kind,latitude,longitude,locality,posted_at,
-                      (SELECT generation FROM image_cache_generation) AS generation`,
-			uuid.NewString(), userID, window.ID, uuid.NewString(), input.Caption, input.Visibility,
-			location.Kind, location.Latitude, location.Longitude, location.Locality, postedAt, imageData)
-		if err != nil {
+		post.PostingWindowID, post.PostedAt, post.OnTimeDeadline = stored.WindowID, stored.At, stored.Deadline
+		if err := stored.Author.setImageKey(); err != nil {
 			return err
 		}
-		stored.OnTimeDeadline = window.OnTimeDeadline
-		if err := tx.Commit(); err != nil {
-			return err
+		c.Set("post_photo_bytes", len(imageData))
+		c.Set("post_photo_origin", ref.region)
+		if ref.region == "" {
+			h.ImageFiles.warmJPEG(insertedImage{CreatedAt: post.PostedAt, Generation: stored.Epoch}, post.ImageID, imageData)
+		} else {
+			imageBodies.put(stored.Epoch, imageBodyKey{ID: post.ImageID, CreatedAt: post.PostedAt, OwnerKey: stored.Author.SecretKeyHash}, cachedImageBody{Data: imageData, MediaType: "image/jpeg", Regional: true})
 		}
-		h.ImageFiles.warmJPEG(insertedImage{CreatedAt: stored.PostedAt, Generation: stored.Generation}, stored.ImageID, imageData)
-		return c.JSON(http.StatusCreated, newPostResponse(stored.Post, user))
+		return c.JSON(http.StatusCreated, newPostResponse(post, stored.Author))
 	}
 }
 
