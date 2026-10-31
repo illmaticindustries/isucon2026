@@ -56,17 +56,33 @@ func TestSignatureParallelAndBounded(t *testing.T) {
 		}(n)
 	}
 	wg.Wait()
-	// Fill the bounded cache without thousands of expensive computations.
-	signatureCache.Lock()
+	// Fill beyond one generation without thousands of expensive computations.
 	for i := 0; i < signatureCacheLimit; i++ {
-		signatureCache.values[signatureCacheKey{imageID: fmt.Sprint(i)}] = [32]byte{}
+		storeImageSignature(signatureCacheKey{imageID: fmt.Sprint(i)}, [32]byte{})
 	}
-	signatureCache.Unlock()
-	imageSignature([]byte("eviction-key"), "eviction", 99)
+	storeImageSignature(signatureCacheKey{imageID: "eviction"}, [32]byte{})
 	signatureCache.Lock()
 	defer signatureCache.Unlock()
-	if len(signatureCache.values) > signatureCacheLimit {
+	if len(signatureCache.current) > signatureCacheLimit || len(signatureCache.previous) > signatureCacheLimit {
 		t.Fatal("cache exceeds bound")
+	}
+}
+
+func TestSignatureCacheKeepsPreviousGeneration(t *testing.T) {
+	signatureCache.Lock()
+	signatureCache.current = make(map[signatureCacheKey][sha256.Size]byte)
+	signatureCache.previous = nil
+	signatureCache.Unlock()
+
+	old := signatureCacheKey{imageID: "previous-generation"}
+	storeImageSignature(old, [sha256.Size]byte{7})
+	for i := 0; i < signatureCacheLimit; i++ {
+		storeImageSignature(signatureCacheKey{imageID: fmt.Sprint("fill-", i)}, [32]byte{})
+	}
+	storeImageSignature(signatureCacheKey{imageID: "current-generation"}, [sha256.Size]byte{9})
+
+	if got, ok := loadImageSignature(old); !ok || got[0] != 7 {
+		t.Fatal("previous generation entry was lost instead of retained")
 	}
 }
 
