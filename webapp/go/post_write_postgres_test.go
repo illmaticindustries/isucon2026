@@ -23,10 +23,8 @@ import (
 	"github.com/labstack/echo/v5"
 )
 
-// Two independent connections must observe the winner after waiting for the
-// same author's lock. Using a shared, isolated test schema exercises real row
-// locks, the partitioned image table, and the HTTP handler together.
-func TestPostSlotAfterLockWait(t *testing.T) {
+func isolatedWriteTestDB(t *testing.T) *sqlx.DB {
+	t.Helper()
 	dsn := os.Getenv("ISUREAL_TEST_DB_DSN")
 	if dsn == "" {
 		t.Skip("requires PostgreSQL")
@@ -35,10 +33,10 @@ func TestPostSlotAfterLockWait(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer admin.Close()
+	t.Cleanup(func() { admin.Close() })
 	name := "post_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	admin.MustExec("CREATE SCHEMA " + name)
-	defer admin.MustExec("DROP SCHEMA " + name + " CASCADE")
+	t.Cleanup(func() { admin.MustExec("DROP SCHEMA " + name + " CASCADE") })
 	cfg, err := pgx.ParseConfig(dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -46,11 +44,19 @@ func TestPostSlotAfterLockWait(t *testing.T) {
 	cfg.RuntimeParams["search_path"] = name
 	cfg.RuntimeParams["application_name"] = name
 	db := sqlx.NewDb(stdlib.OpenDB(*cfg), "pgx")
-	defer db.Close()
+	t.Cleanup(func() { db.Close() })
 	var schema string
 	if err := db.Get(&schema, "SELECT current_schema()"); err != nil || schema != name {
 		t.Fatalf("test schema: %q %v", schema, err)
 	}
+	return db
+}
+
+// Two independent connections must observe the winner after waiting for the
+// same author's lock. Using a shared, isolated test schema exercises real row
+// locks, the partitioned image table, and the HTTP handler together.
+func TestPostSlotAfterLockWait(t *testing.T) {
+	db := isolatedWriteTestDB(t)
 	for _, file := range []string{"001-schema.sql", "005-image-cache.sql"} {
 		contents, err := os.ReadFile(filepath.Join("../sql", file))
 		if err != nil {
@@ -104,7 +110,7 @@ func TestPostSlotAfterLockWait(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		var waiting int
-		if err := admin.Get(&waiting, `SELECT count(*) FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock'`, name); err != nil {
+		if err := db.Get(&waiting, `SELECT count(*) FROM pg_stat_activity WHERE application_name=current_schema() AND wait_event_type='Lock'`); err != nil {
 			t.Fatal(err)
 		}
 		if waiting == 2 {
@@ -174,5 +180,58 @@ func TestPostSlotAfterLockWait(t *testing.T) {
 	var count int
 	if err := db.Get(&count, "SELECT count(*) FROM image_objects"); err != nil || count != 2 {
 		t.Fatalf("orphan images after failed insert: %d %v", count, err)
+	}
+}
+
+func TestRegisterConcurrentUsername(t *testing.T) {
+	db := isolatedWriteTestDB(t)
+	for _, name := range []string{"001-schema.sql", "007-user-search.sql"} {
+		data, err := os.ReadFile(filepath.Join("../sql", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		db.MustExec(string(data))
+	}
+	e := echo.New()
+	e.HTTPErrorHandler = APIErrorHandler
+	e.POST("/api/auth/register", registerHandler(&HandlerContext{DB: db}))
+	gate := db.MustBegin()
+	defer gate.Rollback()
+	gate.MustExec("SELECT pg_advisory_xact_lock(hashtextextended('same',0))")
+	results := make(chan int, 2)
+	for range 2 {
+		go func() {
+			r := httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(`{"username":"same","displayName":"Same","region":"asia"}`))
+			r.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			e.ServeHTTP(w, r)
+			results <- w.Code
+		}()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var n int
+		if err := db.Get(&n, "SELECT count(*) FROM pg_stat_activity WHERE application_name=current_schema() AND wait_event='advisory'"); err != nil {
+			t.Fatal(err)
+		}
+		if n == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("registrations did not reach the username lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := gate.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	codes := []int{<-results, <-results}
+	sort.Ints(codes)
+	if codes[0] != 201 || codes[1] != 409 {
+		t.Fatalf("registration statuses %v", codes)
+	}
+	var count int
+	if err := db.Get(&count, "SELECT count(*) FROM users WHERE username='same'"); err != nil || count != 1 {
+		t.Fatalf("rows=%d err=%v", count, err)
 	}
 }

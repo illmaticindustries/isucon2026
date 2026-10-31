@@ -27,14 +27,13 @@ func dbStatsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(struct {
-		Time          time.Time        `json:"time"`
-		Started       time.Time        `json:"started"`
-		PID           int              `json:"pid"`
-		BlockRate     int              `json:"block_rate_ns"`
-		MutexFraction int              `json:"mutex_fraction"`
-		DB            sql.DBStats      `json:"db"`
-		Bulk          map[string]int64 `json:"bulk"`
-	}{time.Now().UTC(), diagnosticStarted, os.Getpid(), blockSampleNanoseconds, mutexSampleFraction, db.Stats(), bulkLimiter.snapshot()})
+		Time          time.Time   `json:"time"`
+		Started       time.Time   `json:"started"`
+		PID           int         `json:"pid"`
+		BlockRate     int         `json:"block_rate_ns"`
+		MutexFraction int         `json:"mutex_fraction"`
+		DB            sql.DBStats `json:"db"`
+	}{time.Now().UTC(), diagnosticStarted, os.Getpid(), blockSampleNanoseconds, mutexSampleFraction, db.Stats()})
 }
 
 // Profiling is reachable only from this host, never through the public router.

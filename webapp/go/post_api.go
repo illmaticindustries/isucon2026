@@ -190,9 +190,10 @@ func getMyCurrentPostHandler(h *HandlerContext) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		ctx := c.Request().Context()
 		userID := GetSession(c).UserID
-		var postID string
-		err := h.DB.GetContext(ctx, &postID, `
-   SELECT p.id FROM posts p
+		var post PostWithAuthor
+		err := h.DB.GetContext(ctx, &post, `
+   SELECT `+postColumns+`, `+userColumnsAs("u", "author")+`
+   FROM posts p
    JOIN posting_windows w ON w.id = p.posting_window_id
    JOIN users u ON u.id = p.author_id
    JOIN posting_windows current ON current.region = u.region AND current.ended_at IS NULL
@@ -205,18 +206,13 @@ func getMyCurrentPostHandler(h *HandlerContext) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		post, err := getPost(ctx, h.DB, postID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return NewAPIError(http.StatusNotFound, "post_not_found")
+		if post.Author.Status != "active" {
+			return sql.ErrNoRows
 		}
-		if err != nil {
+		if err := post.Author.setImageKey(); err != nil {
 			return err
 		}
-		user, err := getUser(ctx, h.DB, userID)
-		if err != nil {
-			return err
-		}
-		return c.JSON(http.StatusOK, getMyCurrentPostResponse(newPostResponse(post, user)))
+		return c.JSON(http.StatusOK, getMyCurrentPostResponse(newPostResponse(post.Post, post.Author)))
 	}
 }
 
@@ -233,19 +229,12 @@ func getPostHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		ctx := c.Request().Context()
-		post, err := getPostWithAuthor(ctx, h.DB, input.PostID)
+		post, err := getVisiblePost(ctx, h.DB, GetSession(c).UserID, input.PostID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewAPIError(http.StatusNotFound, "post_not_found")
 		}
 		if err != nil {
 			return err
-		}
-		viewer, err := loadViewerContext(ctx, h.DB, GetSession(c).UserID)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-		if err != nil || !viewer.canView(post.Post) {
-			return NewAPIError(http.StatusNotFound, "post_not_found")
 		}
 		return c.JSON(http.StatusOK, getPostResponse(newPostResponse(post.Post, post.Author)))
 	}

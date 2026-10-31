@@ -83,6 +83,10 @@ func listMemories(ctx context.Context, db sqlx.QueryerContext, userID string, st
 	if err != nil {
 		return response, err
 	}
+	response.HasMore = len(posts) > 50
+	if response.HasMore {
+		posts = posts[:50]
+	}
 	items := make([]memoryPostResponse, 0, len(posts))
 	for _, post := range posts {
 		items = append(items, memoryPostResponse{
@@ -90,10 +94,6 @@ func listMemories(ctx context.Context, db sqlx.QueryerContext, userID string, st
 			RealMojis:          make([]replaceRealMojiResponse, 0),
 			Comments:           make([]createCommentResponse, 0),
 		})
-	}
-	response.HasMore = len(items) > 50
-	if response.HasMore {
-		items = items[:50]
 	}
 	if err := loadMemoryInteractions(ctx, db, items); err != nil {
 		return response, err
@@ -113,34 +113,30 @@ func loadMemoryInteractions(ctx context.Context, db sqlx.QueryerContext, items [
 		itemByPostID[items[i].ID] = &items[i]
 	}
 
-	query, args, err := sqlx.In(`AND r.post_id IN (?) ORDER BY r.created_at DESC, r.id DESC`, postIDs)
-	if err != nil {
-		return err
-	}
-	reactions, err := selectCurrentRealMojis(ctx, db, sqlx.Rebind(sqlx.DOLLAR, query), args...)
+	reactions, err := selectCurrentRealMojis(ctx, db, `
+    SELECT item.* FROM unnest($1::text[]) AS page(id)
+    CROSS JOIN LATERAL (`+currentRealMojiSelect+` AND r.post_id=page.id
+      ORDER BY r.created_at DESC, r.id DESC LIMIT 50) AS item
+    ORDER BY item.post_id, item.created_at DESC, item.id DESC`, postIDs)
 	if err != nil {
 		return err
 	}
 	for _, reaction := range reactions {
 		item := itemByPostID[reaction.PostID]
-		if len(item.RealMojis) < 50 {
-			item.RealMojis = append(item.RealMojis, newRealMojiResponse(reaction.RealMoji, reaction.Reactor))
-		}
+		item.RealMojis = append(item.RealMojis, newRealMojiResponse(reaction.RealMoji, reaction.Reactor))
 	}
 
-	query, args, err = sqlx.In(`AND c.post_id IN (?) ORDER BY c.created_at, c.id`, postIDs)
-	if err != nil {
-		return err
-	}
-	comments, err := selectCommentsWithAuthor(ctx, db, sqlx.Rebind(sqlx.DOLLAR, query), args...)
+	comments, err := selectCommentsWithAuthor(ctx, db, `
+    SELECT item.* FROM unnest($1::text[]) AS page(id)
+    CROSS JOIN LATERAL (`+currentCommentSelect+` AND c.post_id=page.id
+      ORDER BY c.created_at, c.id LIMIT 50) AS item
+    ORDER BY item.post_id, item.created_at, item.id`, postIDs)
 	if err != nil {
 		return err
 	}
 	for _, comment := range comments {
 		item := itemByPostID[comment.PostID]
-		if len(item.Comments) < 50 {
-			item.Comments = append(item.Comments, newCommentResponse(comment.Comment, comment.Author))
-		}
+		item.Comments = append(item.Comments, newCommentResponse(comment.Comment, comment.Author))
 	}
 	return nil
 }
