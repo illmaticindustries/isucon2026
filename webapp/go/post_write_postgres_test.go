@@ -2,17 +2,20 @@ package isureal
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"image"
 	"image/jpeg"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -180,6 +183,78 @@ func TestPostSlotAfterLockWait(t *testing.T) {
 	var count int
 	if err := db.Get(&count, "SELECT count(*) FROM image_objects"); err != nil || count != 2 {
 		t.Fatalf("orphan images after failed insert: %d %v", count, err)
+	}
+	db.MustExec(`ALTER TABLE posts DROP CONSTRAINT test_insert_failure;
+		UPDATE users SET secret_key_hash='broken' WHERE id='author'`)
+	if rec := post(); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("invalid stored signing key: %d", rec.Code)
+	}
+	if err := db.Get(&count, "SELECT count(*) FROM image_objects"); err != nil || count != 2 {
+		t.Fatalf("committed a photo that could not be signed: %d %v", count, err)
+	}
+	db.MustExec(`UPDATE users SET secret_key_hash=repeat('12',32) WHERE id='author';
+		UPDATE posting_windows SET starts_at=clock_timestamp()+interval '1 hour' WHERE id='tomorrow'`)
+	if rec := post(); rec.Code != http.StatusConflict {
+		t.Fatalf("future window accepted a post: %d", rec.Code)
+	}
+}
+
+type countPostWrites struct {
+	net.Conn
+	writes *atomic.Int64
+}
+
+func (c countPostWrites) Write(p []byte) (int, error) {
+	c.writes.Add(1)
+	return c.Conn.Write(p)
+}
+
+// Count PostgreSQL protocol writes on a warmed connection in CI. A small
+// JPEG fits in a single packet; the test exercises the actual write path.
+func TestWarmPostDatabaseExchange(t *testing.T) {
+	db := isolatedWriteTestDB(t)
+	schema, err := os.ReadFile("../sql/001-schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.MustExec(string(schema))
+	db.MustExec(`INSERT INTO users(id,username,secret_key_hash,display_name,region) VALUES
+		('one','one',repeat('12',32),'One','asia'),('two','two',repeat('34',32),'Two','asia');
+		INSERT INTO posting_windows(id,region,local_date,starts_at,on_time_deadline)
+		VALUES('today','asia',CURRENT_DATE,now()-interval '1 minute',now()+interval '1 hour')`)
+	cfg, err := pgx.ParseConfig(os.Getenv("ISUREAL_TEST_DB_DSN"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var searchPath string
+	if err := db.Get(&searchPath, "SELECT current_schema()"); err != nil {
+		t.Fatal(err)
+	}
+	cfg.RuntimeParams["search_path"] = searchPath
+	dial := cfg.DialFunc
+	var writes atomic.Int64
+	cfg.DialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return countPostWrites{c, &writes}, nil
+	}
+	measured := sqlx.NewDb(stdlib.OpenDB(*cfg), "pgx")
+	defer measured.Close()
+	measured.SetMaxOpenConns(1)
+	var imageBytes bytes.Buffer
+	if err := jpeg.Encode(&imageBytes, image.NewGray(image.Rect(0, 0, 8, 8)), nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"one", "two"} {
+		writes.Store(0)
+		if _, _, err := storePhotoPost(t.Context(), measured, id, createPostRequest{Visibility: "public"}, PostLocation{Kind: "none"}, imageBytes.Bytes()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := writes.Load(); got != 1 {
+		t.Fatalf("warmed post used %d protocol writes, want one batch", got)
 	}
 }
 
