@@ -86,6 +86,27 @@ class WorkflowTest(unittest.TestCase):
                     deploy.main()
                 run.assert_not_called()
 
+    def test_bench_reserve_rotates_nginx_logs_after_acquire(self):
+        events = []
+        with patch.dict(os.environ, {'PORTAL_IDLE': 'yes'}), patch.object(operation_lock, 'request', side_effect=lambda action, *args: events.append(action)), patch.object(operation_lock, 'rotate_nginx_logs', side_effect=lambda: events.append('rotate')), patch.object(sys, 'argv', ['operation_lock.py', 'reserve']):
+            operation_lock.main()
+        self.assertEqual(events, ['acquire', 'rotate'])
+
+    def test_failed_rotation_keeps_bench_reservation(self):
+        events = []
+        with patch.dict(os.environ, {'PORTAL_IDLE': 'yes'}), patch.object(operation_lock, 'request', side_effect=lambda action, *args: events.append(action)), patch.object(operation_lock, 'rotate_nginx_logs', side_effect=subprocess.CalledProcessError(255, 'ssh')), patch.object(sys, 'argv', ['operation_lock.py', 'reserve']):
+            with self.assertRaises(subprocess.CalledProcessError):
+                operation_lock.main()
+        self.assertEqual(events, ['acquire'])
+
+    def test_nginx_rotate_runs_on_app_hosts_without_new_reservation(self):
+        commands = []
+        with patch.object(operation_lock, 'request') as request, patch.object(deploy, 'run', side_effect=lambda args, **kwargs: commands.append(args[-2:])), patch.object(sys, 'argv', ['deploy.py', 'nginx-rotate', '--hosts', 'asia1 europe1 america1']):
+            deploy.main()
+        request.assert_not_called()
+        self.assertEqual([c[0] for c in commands], ['isucon@' + deploy.HOSTS[n] for n in ('asia1', 'europe1', 'america1')])
+        self.assertTrue(all('nginx -s reopen' in c[1] and 'sudo -n mv access.log access.log.' in c[1] for c in commands))
+
 
 if __name__ == '__main__':
     unittest.main()

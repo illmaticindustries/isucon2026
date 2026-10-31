@@ -33,7 +33,7 @@ def output(args):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('action', choices=['build', 'deploy', 'preflight', 'rollback', 'status', 'logs', 'deploy-indexes', 'verify-indexes', 'nginx-log', 'alp', 'enable-pgstats', 'alp-install', 'nginx-deploy'])
+    p.add_argument('action', choices=['build', 'deploy', 'preflight', 'rollback', 'status', 'logs', 'deploy-indexes', 'verify-indexes', 'nginx-log', 'alp', 'enable-pgstats', 'alp-install', 'nginx-deploy', 'nginx-rotate'])
     p.add_argument('--ref', default='HEAD')
     p.add_argument('--hosts', default='asia1 europe1 america1')
     a = p.parse_args()
@@ -44,7 +44,7 @@ def main():
         end = datetime.datetime(2026, 10, 31, 18, tzinfo=datetime.timezone(datetime.timedelta(hours=9)))
         if datetime.datetime.now(datetime.timezone.utc) >= end:
             p.error('competition ended; wait for organizer permission and update this guard explicitly')
-    if a.action in ('deploy', 'rollback', 'preflight', 'nginx-deploy') and 'asia2' in names:
+    if a.action in ('deploy', 'rollback', 'preflight', 'nginx-deploy', 'nginx-rotate') and 'asia2' in names:
         p.error('application actions cannot target the DB server asia2')
     if a.action in ('deploy-indexes', 'verify-indexes', 'enable-pgstats') and names != ['asia2']:
         p.error('DB operations require HOSTS=asia2')
@@ -67,6 +67,13 @@ def main():
                     remote(n, 'journalctl -u ' + ('postgresql' if n == 'asia2' else 'isureal-go') + ' -n 100 --no-pager')
                 else:
                     remote(n, '(cat /home/isucon/webapp/.deploy-revision 2>/dev/null || true); systemctl --no-pager status ' + ('postgresql' if n == 'asia2' else 'isureal-go nginx'))
+            return
+        # Called by bench-reserve while it holds the benchmark reservation.
+        if a.action == 'nginx-rotate':
+            rotated = 'access.log.' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+            for n in names:
+                print('=== ' + n, flush=True)
+                remote(n, 'cd /var/log/nginx && if sudo -n test -e access.log; then sudo -n mv access.log ' + rotated + '; fi && sudo -n nginx -s reopen && echo "previous log: /var/log/nginx/' + rotated + '"')
             return
         if a.action == 'alp-install':
             with urllib.request.urlopen(ALP_URL, timeout=30) as r:
