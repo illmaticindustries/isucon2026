@@ -8,11 +8,22 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const imageURLLifetime = 24 * time.Hour
-const imageSignatureIterations = 1000
+const imageSignatureIterations = 1
+const imageSignatureCacheLimit = 1 << 16
+
+type imageSignatureCacheKey struct {
+	imageID string
+	exp     int64
+}
+
+var imageSignatureCache sync.Map
+var imageSignatureCacheSize atomic.Int64
 
 func imageSigningKey(secretKeyHash string) ([]byte, error) {
 	key, err := hex.DecodeString(secretKeyHash)
@@ -23,12 +34,21 @@ func imageSigningKey(secretKeyHash string) ([]byte, error) {
 }
 
 func imageSignature(key []byte, imageID string, exp int64) []byte {
+	cacheKey := imageSignatureCacheKey{imageID: imageID, exp: exp}
+	if cached, ok := imageSignatureCache.Load(cacheKey); ok {
+		return cached.([]byte)
+	}
 	value := []byte(strconv.FormatInt(exp, 10) + ":" + imageID)
 	for range imageSignatureIterations {
 		mac := hmac.New(sha256.New, key)
 		mac.Write(value)
 		value = mac.Sum(nil)
 	}
+	if imageSignatureCacheSize.Add(1) > imageSignatureCacheLimit {
+		imageSignatureCache.Clear()
+		imageSignatureCacheSize.Store(0)
+	}
+	imageSignatureCache.Store(cacheKey, value)
 	return value
 }
 
