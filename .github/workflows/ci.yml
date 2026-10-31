@@ -11,41 +11,39 @@ concurrency:
 jobs:
   go:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: isureal_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 2s
-          --health-timeout 2s
-          --health-retries 20
+    # Database integration tests are opt-in locally, never provision a DB in CI.
     env:
-      ISUREAL_TEST_DB_DSN: postgres://postgres:postgres@localhost:5432/isureal_test?sslmode=disable
+      ISUREAL_TEST_DB_DSN: ''
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
+        id: toolchain
+        background: true
         with:
           go-version-file: webapp/go/go.mod
           cache-dependency-path: webapp/go/go.sum
-      - name: Ensure nginx is available for three-region image integration tests
-        run: command -v nginx || (sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends nginx)
-      - run: bash -n scripts/deploy-remote.sh && python3 -m py_compile scripts/deploy.py
-      - run: python3 -m unittest discover -s tests -v
-      - run: |
-          go vet ./... &
-          vet_pid=$!
-          go test -vet=off ./... &
-          test_pid=$!
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./cmd/isureal &
-          build_pid=$!
-          failed=0
-          wait "$vet_pid" || failed=1
-          wait "$test_pid" || failed=1
-          wait "$build_pid" || failed=1
-          exit "$failed"
+      - name: Check deployment script syntax
+        run: bash -n scripts/deploy-remote.sh && python3 -m py_compile scripts/deploy.py
+      # setup-go publishes PATH only after the background step is joined.
+      - wait: toolchain
+      - name: Go vet
+        id: vet
+        background: true
+        run: go vet ./...
         working-directory: webapp/go
+      - name: Go unit tests (no database)
+        id: tests
+        background: true
+        run: go test -vet=off ./...
+        working-directory: webapp/go
+      - name: Build Linux application
+        id: build
+        background: true
+        run: go build -o /tmp/isureal ./cmd/isureal
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        working-directory: webapp/go
+      # A failure in any background step must fail CI.
+      - wait: [vet, tests, build]
