@@ -135,7 +135,8 @@ func TestRegionalImageNginx(t *testing.T) {
 		}
 		sites.WriteString(strings.NewReplacer("listen 80 default_server", "listen 127.0.0.1:"+ports[i]+" default_server", "192.168.1.10:8091", "127.0.0.1:"+ports[3], "192.168.1.10:8092", "127.0.0.1:"+ports[4],
 			"8091 isureal", ports[3]+" isureal", "8092 isureal", ports[4]+" isureal",
-			"127.0.0.1:8080", addrs[0], "192.168.1.10:8081", addrs[1], "192.168.1.10:8082", addrs[2],
+			"isureal_backend", fmt.Sprintf("isureal_backend_fixture_%d", i),
+			"127.0.0.1:8080", addrs[i], "192.168.1.10:8081", addrs[1], "192.168.1.10:8082", addrs[2],
 			"allow 192.168.2.10;", "allow 127.0.0.1;", "/home/isucon/.isureal-image-files", s.root).Replace(string(b)))
 	}
 	conf := "worker_processes 1; master_process off; daemon off; pid " + dir + "/pid; error_log stderr warn; events {} http {access_log off; sendfile on; types { image/jpeg jpg; image/png png; } "
