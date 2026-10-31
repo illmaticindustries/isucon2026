@@ -4,11 +4,11 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v5"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
@@ -154,28 +154,41 @@ func getUserHandler(h *HandlerContext) echo.HandlerFunc {
 		}
 		ctx := c.Request().Context()
 		viewer := GetSession(c).UserID
-		user, err := getUser(ctx, h.DB, input.UserID)
+		// A region that reaches the shared database over an inter-region link
+		// pays a round trip per statement. The profile, whether the viewer
+		// blocked the target, and whether they are friends are constants of one
+		// primary snapshot, so fetch them in a single statement.
+		var row struct {
+			User
+			IsBlocked bool `db:"is_blocked"`
+			IsFriend  bool `db:"is_friend"`
+		}
+		err := sqlx.GetContext(ctx, h.DB, &row, `
+  SELECT `+strings.Join(userColumns, ", ")+`,
+    EXISTS(SELECT 1 FROM block_relations b
+      WHERE (b.blocker_id=$2 AND b.blocked_id=u.id)
+         OR (b.blocker_id=u.id AND b.blocked_id=$2)) AS is_blocked,
+    EXISTS(SELECT 1 FROM friendships f
+      WHERE (f.user_low_id=$2 AND f.user_high_id=u.id)
+         OR (f.user_low_id=u.id AND f.user_high_id=$2)) AS is_friend
+  FROM users u WHERE u.id=$1 AND u.status='active'
+  `, input.UserID, viewer)
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewAPIError(http.StatusNotFound, "relationship_not_found")
 		}
 		if err != nil {
 			return err
 		}
-		blocked, err := isBlocked(ctx, h.DB, viewer, user.ID)
-		if err != nil {
+		if err := row.User.setImageKey(); err != nil {
 			return err
 		}
-		if blocked {
+		if row.IsBlocked {
 			return NewAPIError(http.StatusNotFound, "relationship_not_found")
 		}
-		friends, err := getFriendIDs(ctx, h.DB, viewer)
-		if err != nil {
-			return err
+		if row.User.AccountType != "certified_public" && !row.IsFriend {
+			row.User.Bio = ""
 		}
-		if user.AccountType != "certified_public" && !slices.Contains(friends, user.ID) {
-			user.Bio = ""
-		}
-		return c.JSON(http.StatusOK, getUserResponse(newRelationshipUserResponse(user)))
+		return c.JSON(http.StatusOK, getUserResponse(newRelationshipUserResponse(row.User)))
 	}
 }
 
