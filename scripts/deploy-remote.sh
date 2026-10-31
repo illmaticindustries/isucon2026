@@ -2,6 +2,7 @@
 set -euo pipefail
 base=/home/isucon/webapp
 state=/home/isucon/.isureal-deploy
+nginx=/etc/nginx
 mkdir -p "$state"
 exec 9>"$state/lock"
 flock -n 9 || { echo 'Another deploy is active'; exit 1; }
@@ -55,5 +56,25 @@ deploy)
     health
     trap - EXIT
     ;;
-*) echo 'Expected deploy or rollback' >&2; exit 2 ;;
+nginx)
+    stage=$2
+    tar -xf "$stage/nginx.tar" -C "$stage"
+    test -s "$stage/nginx/nginx.conf"
+    test -s "$stage/nginx/sites-available/isureal.conf"
+    backup=$(mktemp -d "$state/nginx-backup.XXXXXXXX")
+    cp -p "$nginx/nginx.conf" "$backup/nginx.conf"
+    cp -p "$nginx/sites-available/isureal.conf" "$backup/isureal.conf"
+    # Keep the running config if the new one fails validation.
+    sudo -n install -m 644 "$stage/nginx/nginx.conf" "$nginx/nginx.conf"
+    sudo -n install -m 644 "$stage/nginx/sites-available/isureal.conf" "$nginx/sites-available/isureal.conf"
+    if ! sudo -n nginx -t; then
+        sudo -n install -m 644 "$backup/nginx.conf" "$nginx/nginx.conf"
+        sudo -n install -m 644 "$backup/isureal.conf" "$nginx/sites-available/isureal.conf"
+        echo "nginx -t failed; restored $backup" >&2
+        exit 1
+    fi
+    sudo -n systemctl reload nginx
+    echo "nginx reloaded; previous config in $backup"
+    ;;
+*) echo 'Expected deploy, rollback or nginx' >&2; exit 2 ;;
 esac

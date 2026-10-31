@@ -55,5 +55,42 @@ class DeployTest(unittest.TestCase):
     def test_failed_restart_restores_previous_files(self):
         self.exercise(fail=True)
 
+    def exercise_nginx(self, fail=False):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            nginx, state, stage, bins = [root/n for n in ['nginx', 'state', 'stage', 'bin']]
+            for p in [nginx/'sites-available', stage/'source/nginx/sites-available', bins]:
+                p.mkdir(parents=True, exist_ok=True)
+            for name in ['nginx.conf', 'sites-available/isureal.conf']:
+                (nginx/name).write_text('old')
+                (stage/'source/nginx'/name).write_text('new')
+            with tarfile.open(stage/'nginx.tar', 'w') as tar:
+                tar.add(stage/'source/nginx', arcname='nginx')
+            scripts = {
+                'sudo': '#!/bin/bash\nshift\nexec "$@"\n',
+                'nginx': '#!/bin/bash\nif [ -f "$NGINX_FAIL" ]; then exit 1; fi\nexit 0\n',
+                'systemctl': '#!/bin/bash\necho "$@" >> "$RELOADS"\n',
+                'flock': '#!/bin/bash\nexit 0\n',
+            }
+            for n, text in scripts.items():
+                (bins/n).write_text(text)
+                (bins/n).chmod(0o755)
+            marker, reloads = root/'nginx-fail', root/'reloads'
+            if fail:
+                marker.touch()
+            env = dict(os.environ, PATH=str(bins)+':'+os.environ['PATH'], NGINX_FAIL=str(marker), RELOADS=str(reloads))
+            script = (ROOT/'scripts/deploy-remote.sh').read_text().replace('nginx=/etc/nginx', 'nginx='+str(nginx)).replace('state=/home/isucon/.isureal-deploy', 'state='+str(state))
+            result = subprocess.run(['bash', '-s', '--', 'nginx', str(stage)], input=script, text=True, env=env, capture_output=True)
+            self.assertEqual(result.returncode != 0, fail, result.stderr + result.stdout)
+            for name in ['nginx.conf', 'sites-available/isureal.conf']:
+                self.assertEqual((nginx/name).read_text(), 'old' if fail else 'new')
+            self.assertEqual(reloads.exists() and reloads.read_text(), False if fail else 'reload nginx\n')
+
+    def test_nginx_config_reloads(self):
+        self.exercise_nginx()
+
+    def test_invalid_nginx_config_is_restored(self):
+        self.exercise_nginx(fail=True)
+
 if __name__ == '__main__':
     unittest.main()
