@@ -94,6 +94,10 @@ func (c *imageTestConn) Close() error                        { return nil }
 func (c *imageTestConn) Begin() (driver.Tx, error)           { return nil, fmt.Errorf("unsupported") }
 func (c *imageTestConn) QueryContext(_ context.Context, q string, _ []driver.NamedValue) (driver.Rows, error) {
 	s := c.state
+	if strings.Contains(q, "FROM image_object_index") {
+		// The index knows created_at, so the metadata lookup is partition-pruned.
+		return &notificationRows{[]string{"created_at"}, [][]driver.Value{{time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC)}}}, nil
+	}
 	if strings.Contains(q, "SELECT i.data") {
 		s.bodyCalls++
 		return &notificationRows{[]string{"data", "media_type"}, [][]driver.Value{{[]byte(s.body), "image/jpeg"}}}, nil

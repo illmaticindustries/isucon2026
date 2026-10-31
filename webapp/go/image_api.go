@@ -49,6 +49,13 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 			MediaType string `db:"media_type"`
 			Valid     bool   `db:"valid"`
 		}
+		// Prune image_objects to one partition when the index knows created_at;
+		// otherwise (missing row or index) use the id-only lookup as before.
+		var indexedAt time.Time
+		partition, args := "", []any{input.ImageID}
+		if h.DB.GetContext(ctx, &indexedAt, `SELECT created_at FROM image_object_index WHERE id = $1`, input.ImageID) == nil {
+			partition, args = " AND i.created_at = $2", append(args, indexedAt)
+		}
 		err = h.DB.GetContext(ctx, &metadata, `
    SELECT u.secret_key_hash, g.generation, i.created_at, i.media_type,
      (COALESCE(u.profile_image_id = i.id, false)
@@ -59,8 +66,7 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
         WHERE r.image_id = i.id AND r.reactor_id = u.id AND r.replaced_at IS NULL AND r.deleted_at IS NULL)) AS valid
    FROM image_objects i JOIN users u ON u.id = i.owner_user_id
    CROSS JOIN image_cache_generation g
-   WHERE i.id = $1 AND u.status = 'active'
-  `, input.ImageID)
+   WHERE i.id = $1 AND u.status = 'active'`+partition, args...)
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewAPIError(http.StatusForbidden, "image_forbidden")
 		}
