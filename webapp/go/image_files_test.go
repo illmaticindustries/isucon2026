@@ -146,7 +146,7 @@ func TestRegionalImageNginx(t *testing.T) {
 			"8091 isureal", ports[3]+" isureal", "8092 isureal", ports[4]+" isureal",
 			"127.0.0.1:8080", addrs[i], "192.168.1.10:8081", regionalAddrs[1], "192.168.1.10:8082", regionalAddrs[2],
 			// Production uses separate nginx instances; this fixture combines all three sites.
-			"isureal_backend", fmt.Sprintf("local_backend_%d", i),
+			"isureal_backend", fmt.Sprintf("isureal_backend_fixture_%d", i),
 			"isureal_relationship_backend", fmt.Sprintf("relationship_backend_%d", i),
 			"allow 192.168.2.10;", "allow 127.0.0.1;", "/home/isucon/.isureal-image-files", s.root).Replace(string(b)))
 	}

@@ -5,6 +5,9 @@ on:
     branches: [main]
 permissions:
   contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   go:
     runs-on: ubuntu-latest
@@ -33,5 +36,16 @@ jobs:
         run: command -v nginx || (sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends nginx)
       - run: bash -n scripts/deploy-remote.sh && python3 -m py_compile scripts/deploy.py
       - run: python3 -m unittest discover -s tests -v
-      - run: go vet ./... && go test ./... && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./cmd/isureal
+      - run: |
+          go vet ./... &
+          vet_pid=$!
+          go test -vet=off ./... &
+          test_pid=$!
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./cmd/isureal &
+          build_pid=$!
+          failed=0
+          wait "$vet_pid" || failed=1
+          wait "$test_pid" || failed=1
+          wait "$build_pid" || failed=1
+          exit "$failed"
         working-directory: webapp/go

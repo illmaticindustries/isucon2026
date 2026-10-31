@@ -47,6 +47,7 @@ func NewServerWithDB(config *Config, db *sqlx.DB) *echo.Echo {
 		panic("invalid server region: " + config.Region)
 	}
 	e := echo.New()
+	e.JSONSerializer = fastJSONSerializer{}
 	e.IPExtractor = extractClientIP
 
 	e.Use(ActionLogMiddleware(config.LogLevel, os.Stdout))
