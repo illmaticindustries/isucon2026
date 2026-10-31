@@ -67,7 +67,7 @@ func getFeedHandler(h *HandlerContext) echo.HandlerFunc {
 			return c.JSON(http.StatusOK, getFeedResponse{Items: items, HasMore: hasMore})
 		}
 		// Ranked feeds need every eligible candidate before sorting by score.
-		viewer, err := loadViewerContext(ctx, h.DB, GetSession(c).UserID)
+		viewer, err := loadViewerContextCached(ctx, h.DB, GetSession(c).UserID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return c.JSON(http.StatusOK, getFeedResponse{Items: []feedItemResponse{}})
 		}

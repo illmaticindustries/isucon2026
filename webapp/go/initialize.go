@@ -25,6 +25,8 @@ func initializeHandler(h *HandlerContext) echo.HandlerFunc {
 		defer notificationBatches.clear()
 		clearSessionCache()
 		defer clearSessionCache()
+		clearViewerContextCache()
+		defer clearViewerContextCache()
 		cmd := exec.Command("../sql/init.sh")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
