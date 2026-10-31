@@ -5,12 +5,21 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/labstack/echo/v5"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
+
+const searchUserScanLimit = 200
+const normalizeSearchCacheLimit = 1 << 16
+
+var normalizeSearchCache sync.Map
+var normalizeSearchCacheSize atomic.Int64
 
 type searchUsersRequest struct {
 	Q              string `query:"q"`
@@ -24,7 +33,16 @@ type searchUsersResponse struct {
 }
 
 func normalizeSearchText(value string) string {
-	return norm.NFC.String(cases.Fold().String(norm.NFC.String(value)))
+	if cached, ok := normalizeSearchCache.Load(value); ok {
+		return cached.(string)
+	}
+	normalized := norm.NFC.String(cases.Fold().String(norm.NFC.String(value)))
+	if normalizeSearchCacheSize.Add(1) > normalizeSearchCacheLimit {
+		normalizeSearchCache.Clear()
+		normalizeSearchCacheSize.Store(0)
+	}
+	normalizeSearchCache.Store(value, normalized)
+	return normalized
 }
 
 func searchUsersHandler(h *HandlerContext) echo.HandlerFunc {
@@ -41,33 +59,43 @@ func searchUsersHandler(h *HandlerContext) echo.HandlerFunc {
 		}
 		ctx := c.Request().Context()
 		viewer := GetSession(c).UserID
-		var users []User
-		if err := h.DB.SelectContext(ctx, &users, `SELECT `+strings.Join(userColumns, ", ")+` FROM users WHERE status='active' AND id<>$1 AND ($2='' OR (username,id)>($2,$3)) ORDER BY username, id`, viewer, input.BeforeUsername, input.BeforeID); err != nil {
-			return err
-		}
 		blocked, err := getBlockedUserIDs(ctx, h.DB, viewer)
 		if err != nil {
 			return err
 		}
 		query := normalizeSearchText(input.Q)
-		items := make([]relationshipUserResponse, 0)
-		for _, user := range users {
-			if !strings.Contains(normalizeSearchText(user.Username), query) && !strings.Contains(normalizeSearchText(user.DisplayName), query) {
-				continue
-			}
-			if blocked[user.ID] {
-				continue
-			}
-			if err := user.setImageKey(); err != nil {
+		items := make([]relationshipUserResponse, 0, 51)
+		cursorUsername, cursorID := input.BeforeUsername, input.BeforeID
+		for len(items) <= 50 {
+			var users []User
+			if err := h.DB.SelectContext(ctx, &users, `SELECT `+strings.Join(userColumns, ", ")+` FROM users WHERE status='active' AND id<>$1 AND ($2='' OR (username,id)>($2,$3)) ORDER BY username, id LIMIT `+strconv.Itoa(searchUserScanLimit), viewer, cursorUsername, cursorID); err != nil {
 				return err
 			}
-			if user.AccountType != "certified_public" {
-				user.Bio = ""
-			}
-			items = append(items, newRelationshipUserResponse(user))
-			if len(items) == 51 {
+			if len(users) == 0 {
 				break
 			}
+			for _, user := range users {
+				if !strings.Contains(normalizeSearchText(user.Username), query) && !strings.Contains(normalizeSearchText(user.DisplayName), query) {
+					continue
+				}
+				if blocked[user.ID] {
+					continue
+				}
+				if err := user.setImageKey(); err != nil {
+					return err
+				}
+				if user.AccountType != "certified_public" {
+					user.Bio = ""
+				}
+				items = append(items, newRelationshipUserResponse(user))
+				if len(items) == 51 {
+					break
+				}
+			}
+			if len(users) < searchUserScanLimit {
+				break
+			}
+			cursorUsername, cursorID = users[len(users)-1].Username, users[len(users)-1].ID
 		}
 		hasMore := len(items) > 50
 		if hasMore {
