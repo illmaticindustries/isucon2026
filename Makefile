@@ -17,3 +17,9 @@ go-build-local: build
 .PHONY: nginx-log alp journalctl deployed-version
 journalctl: logs
 deployed-version: status
+
+.PHONY: enable-pgstats
+enable-pgstats:
+	git fetch origin
+	git merge-base --is-ancestor "$$REF" origin/ops/make-deploy
+	git show "$$REF:scripts/enable-pgstats.sh" | ssh $(SSH_OPTIONS) isucon@52.197.163.28 bash -s
