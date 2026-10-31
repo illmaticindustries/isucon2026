@@ -47,7 +47,10 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 			CreatedAt     time.Time `db:"created_at"`
 			Valid         bool      `db:"valid"`
 		}
-		err = h.DB.GetContext(ctx, &metadata, `
+		// image_objects is partitioned by created_at. Caching the immutable
+		// created_at lets this per-request metadata query prune to a single
+		// partition; a lookup by id alone probes every partition.
+		const metadataQuery = `
    SELECT u.secret_key_hash, g.generation, i.created_at,
      (COALESCE(u.profile_image_id = i.id, false)
       OR EXISTS (SELECT 1 FROM posts p WHERE p.image_id = i.id AND p.author_id = u.id AND p.deleted_at IS NULL)
@@ -57,14 +60,19 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
         WHERE r.image_id = i.id AND r.reactor_id = u.id AND r.replaced_at IS NULL AND r.deleted_at IS NULL)) AS valid
    FROM image_objects i JOIN users u ON u.id = i.owner_user_id
    CROSS JOIN image_cache_generation g
-   WHERE i.id = $1 AND u.status = 'active'
-  `, input.ImageID)
+   WHERE i.id = $1 AND u.status = 'active'`
+		if locator, ok := loadImageLocator(input.ImageID); ok {
+			err = h.DB.GetContext(ctx, &metadata, metadataQuery+` AND i.created_at = $2`, input.ImageID, locator.createdAt)
+		} else {
+			err = h.DB.GetContext(ctx, &metadata, metadataQuery, input.ImageID)
+		}
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewAPIError(http.StatusForbidden, "image_forbidden")
 		}
 		if err != nil {
 			return err
 		}
+		storeImageLocator(input.ImageID, imageLocator{createdAt: metadata.CreatedAt, ownerKey: metadata.SecretKeyHash})
 		key, err := imageSigningKey(metadata.SecretKeyHash)
 		if err != nil {
 			return err
