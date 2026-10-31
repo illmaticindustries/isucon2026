@@ -46,11 +46,10 @@ func getSessionFromHeader(c *echo.Context, db *sqlx.DB) (*Session, error) {
 
 	tokenHashBytes := sha256.Sum256([]byte(token))
 	tokenHash := hex.EncodeToString(tokenHashBytes[:])
-	// Cache session reads for GET requests only. Every cross-process route
-	// (friend requests) is a POST, so a logout or deletion performed here can
-	// always be seen there; caching reads keeps "use the token after logout is
-	// 401" true on whichever host served the logout.
-	cacheable := c.Request().Method == http.MethodGet
+	// Cache session reads for every in-region route. Routes nginx forwards to
+	// another region's listener still read the database, so a logout, deletion
+	// or region change made here is observed there within the same request.
+	cacheable := sessionCacheable(c)
 	if cacheable {
 		if session, ok := loadCachedSession(tokenHash); ok {
 			return session, nil

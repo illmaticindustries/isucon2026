@@ -4,7 +4,26 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/labstack/echo/v5"
 )
+
+// crossProcessRoutes are forwarded by nginx to another region's listener
+// (see etc/nginx/sites-available/isureal-*.conf). Their session must be read
+// from the database so that a logout, deletion or region change performed on
+// this host is visible there. Every other route is served in-region and its
+// session read may be cached.
+var crossProcessRoutes = map[string]struct{}{
+	"GET /api/users":                               {},
+	"POST /api/posts":                              {},
+	"POST /api/friend-requests":                    {},
+	"POST /api/friend-requests/:requestId/:action": {},
+}
+
+func sessionCacheable(c *echo.Context) bool {
+	_, cross := crossProcessRoutes[c.Request().Method+" "+c.Path()]
+	return !cross
+}
 
 // sessionCacheTTL bounds how long a session read may be reused. Every mutation
 // this process performs (login, logout, account deletion, profile/region
