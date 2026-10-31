@@ -36,13 +36,15 @@ func beginRelationshipTx(ctx context.Context, db *sqlx.DB, actor, target string)
 	// Serialize changes of this pair only. FOR SHARE still keeps both users
 	// active against deletion and profile/region updates, but no longer queues
 	// every relationship, RealMoji and login of a popular user behind each other.
+	// The pair advisory lock is taken in the same statement as the validation so
+	// the transaction needs one fewer round trip while holding it.
 	low, high := min(actor, target), max(actor, target)
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('relationship:' || $1 || ':' || $2, 0))`, low, high); err != nil {
-		tx.Rollback()
-		return nil, err
-	}
 	var lockedIDs []string
-	if err := tx.SelectContext(ctx, &lockedIDs, `SELECT id FROM users WHERE id IN ($1,$2) AND status='active' ORDER BY id FOR SHARE`, low, high); err != nil {
+	if err := tx.SelectContext(ctx, &lockedIDs, `
+  SELECT u.id FROM users u
+  CROSS JOIN (SELECT pg_advisory_xact_lock(hashtextextended('relationship:' || $1 || ':' || $2, 0))) AS pair_lock
+  WHERE u.id IN ($1,$2) AND u.status='active'
+  ORDER BY u.id FOR SHARE OF u`, low, high); err != nil {
 		tx.Rollback()
 		return nil, err
 	}
