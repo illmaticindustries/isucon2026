@@ -12,6 +12,11 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS posts_active_image_author
   ON posts (image_id, author_id)
   WHERE deleted_at IS NULL;
 
+-- Feed pages probe open windows and (for friends) the viewer's direct friends.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS posts_live_window_author
+  ON posts (posting_window_id, author_id)
+  WHERE deleted_at IS NULL;
+
 -- The existing (user_low_id, user_high_id) index covers the other direction.
 CREATE INDEX CONCURRENTLY IF NOT EXISTS friendships_high_low
   ON friendships (user_high_id, user_low_id);
