@@ -28,6 +28,11 @@ func main() {
 		listeners["192.168.1.10:8081"] = "europe"
 		listeners["192.168.1.10:8082"] = "america"
 	}
+	// asia1 is CPU-bound while europe1/america1 are idle: asia1's nginx sends
+	// Memories (signature-heavy, read-only) here over the private network.
+	if address, ok := map[string]string{"europe": "192.168.2.10:8093", "america": "192.168.3.10:8093"}[config.Region]; ok {
+		listeners[address] = "asia"
+	}
 	var wg sync.WaitGroup
 	errorsCh := make(chan error, len(listeners))
 	for address, region := range listeners {
