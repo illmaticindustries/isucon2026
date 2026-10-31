@@ -228,6 +228,9 @@ func updateMeHandler(h *HandlerContext) echo.HandlerFunc {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+		// Region is part of the cached session and drives RegionMiddleware, so
+		// drop this user's cached sessions to reflect the update immediately.
+		invalidateCachedSessionsForUser(session.UserID)
 		return c.JSON(http.StatusOK, updateMeResponse(newGetMeResponse(user)))
 	}
 }
