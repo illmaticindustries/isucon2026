@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"database/sql"
 	"errors"
-	"image/jpeg"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"time"
+
+	"example.com/isureal-company/isureal/internal/jpegvalidate"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v5"
@@ -76,11 +77,11 @@ func createPostHandler(h *HandlerContext) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		img, err := jpeg.Decode(bytes.NewReader(imageData))
+		img, err := jpegvalidate.Validate(bytes.NewReader(imageData))
 		if err != nil {
 			return NewAPIError(http.StatusBadRequest, "invalid_post")
 		}
-		if img.Bounds().Dx() > 4096 || img.Bounds().Dy() > 4096 {
+		if img.Dx() > 4096 || img.Dy() > 4096 {
 			return NewAPIError(http.StatusBadRequest, "invalid_post")
 		}
 

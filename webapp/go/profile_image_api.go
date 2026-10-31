@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"database/sql"
 	"errors"
-	"image/jpeg"
 	"io"
 	"net/http"
+
+	"example.com/isureal-company/isureal/internal/jpegvalidate"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v5"
@@ -21,12 +22,12 @@ func putProfileImageHandler(h *HandlerContext) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		img, err := jpeg.Decode(bytes.NewReader(data))
+		img, err := jpegvalidate.Validate(bytes.NewReader(data))
 		if err != nil {
 			c.Set("abuse", "invalid_image")
 			return NewAPIError(http.StatusBadRequest, "invalid_profile_image")
 		}
-		if img.Bounds().Dx() > 512 || img.Bounds().Dy() > 512 {
+		if img.Dx() > 512 || img.Dy() > 512 {
 			return NewAPIError(http.StatusBadRequest, "invalid_profile_image")
 		}
 
