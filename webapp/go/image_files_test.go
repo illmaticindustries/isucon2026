@@ -89,12 +89,13 @@ func TestRegionalImageNginx(t *testing.T) {
 	var calls [3]atomic.Int32
 	var accels, fallbacks atomic.Int32
 	var loseFile atomic.Bool
-	var addrs []string
+	var addrs, regionalAddrs []string
 	for region := range 3 {
 		e := echo.New()
 		e.HTTPErrorHandler = APIErrorHandler
 		e.GET("/api/images/:imageId", getImageHandler(&HandlerContext{DB: db, ImageFiles: s}))
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Test-Backend", fmt.Sprintf("local-%d", region))
 			calls[region].Add(1)
 			recorder := httptest.NewRecorder()
 			e.ServeHTTP(recorder, r)
@@ -115,6 +116,14 @@ func TestRegionalImageNginx(t *testing.T) {
 			w.Write(recorder.Body.Bytes())
 		}))
 		defer server.Close()
+		regional := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Test-Backend", fmt.Sprintf("regional-%d", region))
+			if r.Method != "POST" || r.Header.Get("Authorization") != "Bearer test" {
+				http.Error(w, "unexpected request", 400)
+			}
+		}))
+		defer regional.Close()
+		regionalAddrs = append(regionalAddrs, strings.TrimPrefix(regional.URL, "http://"))
 		addrs = append(addrs, strings.TrimPrefix(server.URL, "http://"))
 	}
 	var listeners []net.Listener
@@ -135,7 +144,10 @@ func TestRegionalImageNginx(t *testing.T) {
 		}
 		sites.WriteString(strings.NewReplacer("listen 80 default_server", "listen 127.0.0.1:"+ports[i]+" default_server", "192.168.1.10:8091", "127.0.0.1:"+ports[3], "192.168.1.10:8092", "127.0.0.1:"+ports[4],
 			"8091 isureal", ports[3]+" isureal", "8092 isureal", ports[4]+" isureal",
-			"127.0.0.1:8080", addrs[0], "192.168.1.10:8081", addrs[1], "192.168.1.10:8082", addrs[2],
+			"127.0.0.1:8080", addrs[i], "192.168.1.10:8081", regionalAddrs[1], "192.168.1.10:8082", regionalAddrs[2],
+			// Production uses separate nginx instances; this fixture combines all three sites.
+			"isureal_backend", fmt.Sprintf("local_backend_%d", i),
+			"isureal_relationship_backend", fmt.Sprintf("relationship_backend_%d", i),
 			"allow 192.168.2.10;", "allow 127.0.0.1;", "/home/isucon/.isureal-image-files", s.root).Replace(string(b)))
 	}
 	conf := "worker_processes 1; master_process off; daemon off; pid " + dir + "/pid; error_log stderr warn; events {} http {access_log off; sendfile on; types { image/jpeg jpg; image/png png; } "
@@ -217,5 +229,29 @@ func TestRegionalImageNginx(t *testing.T) {
 	db.MustExec("UPDATE users SET profile_image_id=NULL")
 	for region := range 3 {
 		get(region, signed(exp), nil, 403)
+	}
+	for _, region := range []int{1, 2} {
+		for _, path := range []string{"/api/friend-requests", "/api/friend-requests/id/accept", "/api/friend-requests/id/reject", "/api/friend-requests/id/cancel", "/api/friend-requests-other", "/api/relationships/friends"} {
+			req, err := http.NewRequest(http.MethodPost, "http://127.0.0.1:"+ports[region]+path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", "Bearer test")
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			want := fmt.Sprintf("local-%d", region)
+			if path == "/api/friend-requests" || strings.HasPrefix(path, "/api/friend-requests/id/") {
+				want = fmt.Sprintf("regional-%d", region)
+				if resp.StatusCode != 200 {
+					t.Errorf("%s: status %d", path, resp.StatusCode)
+				}
+			}
+			if got := resp.Header.Get("X-Test-Backend"); got != want {
+				t.Errorf("%s: got %q want %q", path, got, want)
+			}
+		}
 	}
 }
