@@ -119,7 +119,7 @@ func TestRegionalImageNginx(t *testing.T) {
 		regional := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-Test-Backend", fmt.Sprintf("regional-%d", region))
 			wantMethod := http.MethodPost
-			if r.URL.Path == "/api/users" {
+			if r.URL.Path == "/api/users" || r.URL.Path == "/api/posts/me/current" || r.URL.Path == "/api/posting-window/current" {
 				wantMethod = http.MethodGet
 			}
 			if r.URL.Path == "/api/users" && r.URL.Query().Get("q") != "coffee" {
@@ -239,9 +239,9 @@ func TestRegionalImageNginx(t *testing.T) {
 		get(region, signed(exp), nil, 403)
 	}
 	for _, region := range []int{1, 2} {
-		for _, path := range []string{"/api/friend-requests", "/api/friend-requests/id/accept", "/api/friend-requests/id/reject", "/api/friend-requests/id/cancel", "/api/friend-requests-other", "/api/relationships/friends", "/api/posts", "/api/users?q=coffee", "/api/posts/id", "/api/users/id"} {
+		for _, path := range []string{"/api/friend-requests", "/api/friend-requests/id/accept", "/api/friend-requests/id/reject", "/api/friend-requests/id/cancel", "/api/friend-requests-other", "/api/relationships/friends", "/api/posts", "/api/users?q=coffee", "/api/posts/id", "/api/users/id", "/api/posts/me/current", "/api/posting-window/current", "/api/posting-window/current-extra"} {
 			method := http.MethodPost
-			if strings.HasPrefix(path, "/api/users") {
+			if strings.HasPrefix(path, "/api/users") || path == "/api/posts/me/current" || strings.HasPrefix(path, "/api/posting-window/") {
 				method = http.MethodGet
 			}
 			req, err := http.NewRequest(method, "http://127.0.0.1:"+ports[region]+path, nil)
@@ -255,7 +255,7 @@ func TestRegionalImageNginx(t *testing.T) {
 			}
 			resp.Body.Close()
 			want := fmt.Sprintf("local-%d", region)
-			if path == "/api/posts" || path == "/api/users?q=coffee" || path == "/api/friend-requests" || strings.HasPrefix(path, "/api/friend-requests/id/") {
+			if path == "/api/posts" || path == "/api/posts/me/current" || path == "/api/posting-window/current" || path == "/api/users?q=coffee" || path == "/api/friend-requests" || strings.HasPrefix(path, "/api/friend-requests/id/") {
 				want = fmt.Sprintf("regional-%d", region)
 				if resp.StatusCode != 200 {
 					t.Errorf("%s: status %d", path, resp.StatusCode)
