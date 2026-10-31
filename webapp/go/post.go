@@ -178,13 +178,17 @@ func (viewer viewerContext) canView(post Post) bool {
 }
 
 func canViewPost(ctx context.Context, db sqlx.QueryerContext, viewerID, postID string) (bool, error) {
-	post, err := getPostWithAuthor(ctx, db, postID)
+	post, err := getPost(ctx, db, postID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
+	return canViewPostRecord(ctx, db, viewerID, post)
+}
+
+func canViewPostRecord(ctx context.Context, db sqlx.QueryerContext, viewerID string, post Post) (bool, error) {
 	viewer, err := loadViewerContext(ctx, db, viewerID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
@@ -192,7 +196,7 @@ func canViewPost(ctx context.Context, db sqlx.QueryerContext, viewerID, postID s
 	if err != nil {
 		return false, err
 	}
-	return viewer.canView(post.Post), nil
+	return viewer.canView(post), nil
 }
 
 func getFriendIDs(ctx context.Context, db sqlx.QueryerContext, userID string) ([]string, error) {

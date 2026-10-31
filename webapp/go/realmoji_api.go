@@ -80,7 +80,7 @@ func replaceRealMojiHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		defer tx.Rollback()
-		allowed, err := canViewPost(ctx, tx, actor, post.ID)
+		allowed, err := canViewPostRecord(ctx, tx, actor, post)
 		if err != nil {
 			return err
 		}
