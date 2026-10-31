@@ -6,8 +6,8 @@ that stream, covered separately by TestNotificationBatchLifecycle.
 """
 from pathlib import Path
 import re,json,sys
-s=(Path(__file__).resolve().parents[1]/'webapp/go/notification_api.go').read_text()
-q=re.search(r'GetContext\(ctx, &row, `(.+?)`',s,re.S)[1]
+s=(Path(__file__).resolve().parents[1]/'webapp/go/notification_poll.go').read_text()
+q=re.search(r'const notificationPollSQL = `(.+?)`',s,re.S)[1] % '(0,$1::text,$2::timestamptz)'
 q=q.replace('$1',"'u1'").replace('$2',"TIMESTAMPTZ '2026-10-31 00:00:00+00'")
 cases=[('active','active','asia','NULL','00:00:01',True),('ended','active','asia',"TIMESTAMPTZ '2026-10-31 00:00:02+00'",'00:00:01',False),('before-connect','active','asia','NULL','00:00:00',False),('inactive','deleted','asia','NULL','00:00:01',False),('moved','active','europe','NULL','00:00:01',True)]
 scripts=[]
