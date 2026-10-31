@@ -109,10 +109,6 @@ func init() { sql.Register("image-body-test", imageTestDriver{}) }
 func TestImageHandlerChecksFreshStateOnCacheHits(t *testing.T) {
 	imageBodies = newImageBodyCache(128<<20, 4096)
 	defer func() { imageBodies = newImageBodyCache(128<<20, 4096) }()
-	oldTTL := imageMetaTTL
-	imageMetaTTL = time.Second
-	clearImageMeta()
-	defer func() { imageMetaTTL = oldTTL; clearImageMeta() }()
 	key := make([]byte, 32)
 	key[0] = 123
 	s := &imageTestState{active: true, valid: true, epoch: 1, body: "first", key: hex.EncodeToString(key)}
@@ -144,13 +140,9 @@ func TestImageHandlerChecksFreshStateOnCacheHits(t *testing.T) {
 			t.Fatalf("%d %s", status, body)
 		}
 	}
-	if s.metadataCalls != 1 || s.bodyCalls != 1 {
-		t.Fatal("metadata and body cache hits must skip all DB retrieval")
+	if s.metadataCalls != 2 || s.bodyCalls != 1 {
+		t.Fatal("hit must check DB metadata but skip body retrieval")
 	}
-	// The metadata cache is bounded by the five-second delete grace; disable it
-	// so the following state changes are observed on the very next request.
-	imageMetaTTL = 0
-	clearImageMeta()
 	s.valid = false
 	if status, _ := fetch(sig, exp); status != 403 {
 		t.Fatal("deleted post or replaced reaction served from cache")
