@@ -150,6 +150,16 @@ func TestFeedPostgresMatchesOriginal(t *testing.T) {
 	})
 	check := func(t *testing.T) {
 		t.Helper()
+		for _, id := range []string{"viewer", "u000", "u001", "u002", "u023", "missing"} {
+			want, wantErr := referenceViewerContext(context.Background(), db, id)
+			got, gotErr := loadViewerContext(context.Background(), db, id)
+			if (wantErr == nil) != (gotErr == nil) || (wantErr != nil && !errors.Is(gotErr, wantErr)) {
+				t.Fatalf("viewer %s error mismatch: got %v want %v", id, gotErr, wantErr)
+			}
+			if wantErr == nil && !reflect.DeepEqual(got, want) {
+				t.Fatalf("viewer %s mismatch: got %#v want %#v", id, got, want)
+			}
+		}
 		for _, feed := range []string{"friends", "public", "following", "friends-of-friends"} {
 			input := getFeedRequest{Feed: feed}
 			for page := 0; ; page++ {
