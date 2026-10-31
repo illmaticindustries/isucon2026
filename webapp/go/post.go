@@ -127,8 +127,10 @@ func loadViewerContext(ctx context.Context, db sqlx.QueryerContext, viewerID str
   ),
   friends_of_friends AS (
     SELECT f.user_low_id, f.user_high_id
-    FROM friendships f
-    WHERE f.user_low_id IN (SELECT id FROM friends) OR f.user_high_id IN (SELECT id FROM friends)
+    FROM friends fr JOIN friendships f ON f.user_low_id = fr.id
+    UNION
+    SELECT f.user_low_id, f.user_high_id
+    FROM friends fr JOIN friendships f ON f.user_high_id = fr.id
   )
   SELECT me.id, me.username, me.secret_key_hash, me.display_name, me.bio, me.profile_image_id,
          me.region, me.account_type, me.status,
