@@ -49,6 +49,9 @@ func (c *notificationConn) QueryContext(ctx context.Context, q string, args []dr
 	if strings.Contains(q, "clock_timestamp") {
 		return &notificationRows{[]string{"clock_timestamp"}, [][]driver.Value{{now}}}, nil
 	}
+	if strings.HasPrefix(c.scenario, "batch-") {
+		return c.batchRows(now, q, args)
+	}
 	r := &notificationRows{columns: []string{"region", "id", "posting_window_id", "window_region", "created_at"}}
 	if c.scenario == "inactive" || (c.scenario == "empty-then-inactive" && c.calls > 2) {
 		return r, nil
