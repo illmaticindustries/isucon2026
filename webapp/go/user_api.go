@@ -143,7 +143,7 @@ func loginHandler(h *HandlerContext) echo.HandlerFunc {
 		if user.Status != "active" || user.SecretKeyHash != hex.EncodeToString(hash[:]) {
 			return NewAPIError(http.StatusUnauthorized, "invalid_credentials")
 		}
-		session, err := createLoginSessionTx(ctx, tx, user.ID)
+		session, err := replaceSessionForLockedUser(ctx, tx, user.ID)
 		if err != nil {
 			return err
 		}

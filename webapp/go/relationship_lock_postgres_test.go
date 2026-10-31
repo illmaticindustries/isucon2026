@@ -126,7 +126,7 @@ func TestLoginSessionLocks(t *testing.T) {
 			tx.Rollback()
 			return nil, err
 		}
-		if _, err := createLoginSessionTx(ctx, tx, "A"); err != nil {
+		if _, err := replaceSessionForLockedUser(ctx, tx, "A"); err != nil {
 			tx.Rollback()
 			return nil, err
 		}
