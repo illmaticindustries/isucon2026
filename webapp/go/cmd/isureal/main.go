@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"os"
 	"os/signal"
-	"runtime/debug"
 	"sync"
 	"syscall"
 	"time"
@@ -18,12 +16,6 @@ import (
 // 2026-09-23
 
 func main() {
-	// Favor throughput over peak memory: the hosts have headroom and the default
-	// GOGC=100 made the collector compete with request work. An explicit GOGC in
-	// the environment still takes precedence.
-	if os.Getenv("GOGC") == "" {
-		debug.SetGCPercent(200)
-	}
 	config := isureal.ConfigFromEnv()
 	db := isureal.OpenDatabase(config)
 	defer db.Close()
