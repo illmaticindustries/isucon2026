@@ -34,6 +34,7 @@ func OpenDatabase(config *Config) *sqlx.DB {
 	if err := db.Ping(); err != nil {
 		panic("failed to ping database: " + err.Error())
 	}
+	diagnosticDB.Store(db.DB)
 	return db
 }
 
