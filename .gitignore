@@ -39,3 +39,6 @@
 
 # macOS resource forks
 ._*
+
+# Python tooling
+__pycache__/
