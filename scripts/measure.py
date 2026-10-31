@@ -71,7 +71,7 @@ def dbhealth(name):
         " pg_size_pretty(temp_bytes) AS temp, deadlocks, xact_commit, xact_rollback, stats_reset"
         " FROM pg_stat_database WHERE datname = current_database()",
         "SELECT checkpoints_timed, checkpoints_req, round(checkpoint_write_time) AS write_ms, round(checkpoint_sync_time) AS sync_ms,"
-        " buffers_checkpoint, buffers_backend, stats_reset FROM pg_stat_bgwriter",
+        " buffers_checkpoint, buffers_clean, maxwritten_clean, buffers_backend, stats_reset FROM pg_stat_bgwriter",
         "SELECT (SELECT count(*) FROM pg_stat_activity WHERE backend_type = 'client backend') AS connections,"
         " current_setting('max_connections') AS max_connections",
         "SELECT name, current_setting(name) AS value FROM pg_settings WHERE name IN ('shared_buffers', 'effective_cache_size',"
