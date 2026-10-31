@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -16,18 +17,43 @@ import (
 
 func main() {
 	config := isureal.ConfigFromEnv()
-	server := isureal.NewServer(config)
+	db := isureal.OpenDatabase(config)
+	defer db.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	startConfig := echo.StartConfig{
-		Address: ":8080",
-		BeforeServeFunc: func(s *http.Server) error {
-			s.ReadHeaderTimeout = 10 * time.Second
-			s.IdleTimeout = 120 * time.Second
-			return nil
-		},
+	listeners := map[string]string{":8080": config.Region}
+	if config.Region == "asia" {
+		// Each ingress region has its own listener: client headers cannot select
+		// a different region. Traffic from remote nginx still follows the router.
+		listeners["192.168.1.10:8081"] = "europe"
+		listeners["192.168.1.10:8082"] = "america"
 	}
-	if err := startConfig.Start(ctx, server); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		panic("failed to start server: " + err.Error())
+	var wg sync.WaitGroup
+	errorsCh := make(chan error, len(listeners))
+	for address, region := range listeners {
+		regionalConfig := *config
+		regionalConfig.Region = region
+		server := isureal.NewServerWithDB(&regionalConfig, db)
+		startConfig := echo.StartConfig{
+			Address: address,
+			BeforeServeFunc: func(s *http.Server) error {
+				s.ReadHeaderTimeout = 10 * time.Second
+				s.IdleTimeout = 120 * time.Second
+				return nil
+			},
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := startConfig.Start(ctx, server); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errorsCh <- err
+				cancel()
+			}
+		}()
+	}
+	wg.Wait()
+	close(errorsCh)
+	for err := range errorsCh {
+		panic("failed to serve regional API: " + err.Error())
 	}
 }

@@ -55,7 +55,7 @@ class DeployTest(unittest.TestCase):
     def test_failed_restart_restores_previous_files(self):
         self.exercise(fail=True)
 
-    def exercise_nginx(self, fail=False):
+    def exercise_nginx(self, fail=False, host="asia1", backend_ready=True):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             nginx, state, stage, bins = [root/n for n in ['nginx', 'state', 'stage', 'bin']]
@@ -64,10 +64,13 @@ class DeployTest(unittest.TestCase):
             for name in ['nginx.conf', 'sites-available/isureal.conf']:
                 (nginx/name).write_text('old')
                 (stage/'source/nginx'/name).write_text('new')
+            for region in ['europe', 'america']:
+                (stage/'source/nginx/sites-available'/('isureal-'+region+'.conf')).write_text(region)
             with tarfile.open(stage/'nginx.tar', 'w') as tar:
                 tar.add(stage/'source/nginx', arcname='nginx')
             scripts = {
                 'sudo': '#!/bin/bash\nshift\nexec "$@"\n',
+                'curl': '#!/bin/bash\nprintf '+('401' if backend_ready else '503')+'\n',
                 'nginx': '#!/bin/bash\nif [ -f "$NGINX_FAIL" ]; then exit 1; fi\nexit 0\n',
                 'systemctl': '#!/bin/bash\necho "$@" >> "$RELOADS"\n',
                 'flock': '#!/bin/bash\nexit 0\n',
@@ -80,14 +83,23 @@ class DeployTest(unittest.TestCase):
                 marker.touch()
             env = dict(os.environ, PATH=str(bins)+':'+os.environ['PATH'], NGINX_FAIL=str(marker), RELOADS=str(reloads))
             script = (ROOT/'scripts/deploy-remote.sh').read_text().replace('nginx=/etc/nginx', 'nginx='+str(nginx)).replace('state=/home/isucon/.isureal-deploy', 'state='+str(state))
-            result = subprocess.run(['bash', '-s', '--', 'nginx', str(stage)], input=script, text=True, env=env, capture_output=True)
-            self.assertEqual(result.returncode != 0, fail, result.stderr + result.stdout)
+            result = subprocess.run(['bash', '-s', '--', 'nginx', str(stage), host], input=script, text=True, env=env, capture_output=True)
+            failed = fail or not backend_ready
+            self.assertEqual(result.returncode != 0, failed, result.stderr + result.stdout)
             for name in ['nginx.conf', 'sites-available/isureal.conf']:
-                self.assertEqual((nginx/name).read_text(), 'old' if fail else 'new')
-            self.assertEqual(reloads.exists() and reloads.read_text(), False if fail else 'reload nginx\n')
+                expected = 'new' if name == 'nginx.conf' or host == 'asia1' else host[:-1]
+                self.assertEqual((nginx/name).read_text(), 'old' if failed else expected)
+            self.assertEqual(reloads.exists() and reloads.read_text(), False if failed else 'reload nginx\n')
 
     def test_nginx_config_reloads(self):
         self.exercise_nginx()
+
+    def test_regional_config_selection(self):
+        for host in ['europe1', 'america1']:
+            self.exercise_nginx(host=host)
+
+    def test_unready_regional_backend_does_not_switch_ingress(self):
+        self.exercise_nginx(host='europe1', backend_ready=False)
 
     def test_invalid_nginx_config_is_restored(self):
         self.exercise_nginx(fail=True)

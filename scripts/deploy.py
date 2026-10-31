@@ -33,7 +33,7 @@ def output(args):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('action', choices=['build', 'deploy', 'preflight', 'rollback', 'status', 'logs', 'deploy-indexes', 'verify-indexes', 'nginx-log', 'alp', 'enable-pgstats', 'alp-install', 'nginx-deploy', 'nginx-rotate', 'pgstats-reset'])
+    p.add_argument('action', choices=['regional-deploy', 'build', 'deploy', 'preflight', 'rollback', 'status', 'logs', 'deploy-indexes', 'verify-indexes', 'nginx-log', 'alp', 'enable-pgstats', 'alp-install', 'nginx-deploy', 'nginx-rotate', 'pgstats-reset'])
     p.add_argument('--ref', default='HEAD')
     p.add_argument('--hosts', default='asia1 europe1 america1')
     a = p.parse_args()
@@ -44,13 +44,30 @@ def main():
         end = datetime.datetime(2026, 10, 31, 18, tzinfo=datetime.timezone(datetime.timedelta(hours=9)))
         if datetime.datetime.now(datetime.timezone.utc) >= end:
             p.error('competition ended; wait for organizer permission and update this guard explicitly')
-    if a.action in ('deploy', 'rollback', 'preflight', 'nginx-deploy', 'nginx-rotate') and 'asia2' in names:
+    if a.action in ('regional-deploy', 'deploy', 'rollback', 'preflight', 'nginx-deploy', 'nginx-rotate') and 'asia2' in names:
         p.error('application actions cannot target the DB server asia2')
     if a.action in ('deploy-indexes', 'verify-indexes', 'enable-pgstats', 'pgstats-reset') and names != ['asia2']:
         p.error('DB operations require HOSTS=asia2')
+    if a.action == 'regional-deploy' and names != ['asia1', 'europe1', 'america1']:
+        p.error('regional-deploy requires HOSTS="asia1 europe1 america1" in that order')
     ssh = ['ssh', *shlex.split(os.environ.get('SSH_OPTIONS', '-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes'))]
     def remote(name, command, **kwargs):
         return run(ssh + ['isucon@' + HOSTS[name], command], **kwargs)
+    def deploy_nginx(work, rev):
+        payload = work/'nginx.tar'
+        with tarfile.open(payload, 'w') as tar:
+            tar.add(work/'etc/nginx', arcname='nginx')
+        for n in names:
+            stage = output(ssh + ['isucon@'+HOSTS[n], 'mktemp -d /home/isucon/.deploy-stage.XXXXXXXX'])
+            if not re.fullmatch(r'/home/isucon/\.deploy-stage\.[A-Za-z0-9]+', stage):
+                raise RuntimeError('unexpected stage path')
+            try:
+                remote(n, 'cat > ' + stage + '/nginx.tar', input=payload.read_bytes())
+                remote(n, 'bash -s -- nginx ' + stage + ' ' + n, input=(work/'scripts/deploy-remote.sh').read_bytes())
+            finally:
+                remote(n, 'rm -rf -- ' + shlex.quote(stage))
+            print(n + ': nginx config ' + rev, flush=True)
+
     def perform():
         if a.action in ('status', 'logs', 'preflight', 'rollback', 'nginx-log', 'alp'):
             for n in names:
@@ -100,6 +117,8 @@ def main():
             archive = work/'source.tar'
             with archive.open('wb') as f:
                 paths = ['etc/nginx'] if a.action == 'nginx-deploy' else ['webapp/go', 'webapp/sql', 'scripts/enable-pgstats.sh']
+                if a.action == 'regional-deploy':
+                    paths.append('etc/nginx')
                 run(['git', '-C', str(ROOT), 'archive', rev, *paths, 'scripts/deploy-remote.sh'], stdout=f)
             run(['tar', '-xf', str(archive), '-C', str(work)])
             if a.action == 'enable-pgstats':
@@ -113,19 +132,7 @@ def main():
                     remote('asia2', 'bash -eu -c ' + shlex.quote(command), input=(work/'webapp/sql'/f).read_bytes())
                 return
             if a.action == 'nginx-deploy':
-                payload = work/'nginx.tar'
-                with tarfile.open(payload, 'w') as tar:
-                    tar.add(work/'etc/nginx', arcname='nginx')
-                for n in names:
-                    stage = output(ssh + ['isucon@'+HOSTS[n], 'mktemp -d /home/isucon/.deploy-stage.XXXXXXXX'])
-                    if not re.fullmatch(r'/home/isucon/\.deploy-stage\.[A-Za-z0-9]+', stage):
-                        raise RuntimeError('unexpected stage path')
-                    try:
-                        remote(n, 'cat > ' + stage + '/nginx.tar', input=payload.read_bytes())
-                        remote(n, 'bash -s -- nginx ' + stage, input=(work/'scripts/deploy-remote.sh').read_bytes())
-                    finally:
-                        remote(n, 'rm -rf -- ' + shlex.quote(stage))
-                    print(n + ': nginx config ' + rev, flush=True)
+                deploy_nginx(work, rev)
                 return
             env = dict(os.environ, GOOS='linux', GOARCH='amd64', CGO_ENABLED='0')
             run(['go', 'test', './...'], cwd=work/'webapp/go')
@@ -149,8 +156,10 @@ def main():
                 finally:
                     remote(n, 'rm -rf -- ' + shlex.quote(stage))
                 print(n + ': deployed ' + rev, flush=True)
+            if a.action == 'regional-deploy':
+                deploy_nginx(work, rev)
 
-    if a.action in ('deploy', 'rollback', 'deploy-indexes', 'enable-pgstats', 'nginx-deploy', 'alp-install'):
+    if a.action in ('regional-deploy', 'deploy', 'rollback', 'deploy-indexes', 'enable-pgstats', 'nginx-deploy', 'alp-install'):
         with mutation(f'{a.action} ref={a.ref} hosts={a.hosts}'):
             perform()
     else:
