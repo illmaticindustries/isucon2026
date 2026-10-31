@@ -58,15 +58,30 @@ deploy)
     ;;
 nginx)
     stage=$2
+    host=${3:-asia1}
     tar -xf "$stage/nginx.tar" -C "$stage"
     test -s "$stage/nginx/nginx.conf"
-    test -s "$stage/nginx/sites-available/isureal.conf"
+    site=isureal.conf
+    case "$host" in
+        asia1) ;;
+        europe1) test ! -f "$stage/nginx/sites-available/isureal-europe.conf" || site=isureal-europe.conf ;;
+        america1) test ! -f "$stage/nginx/sites-available/isureal-america.conf" || site=isureal-america.conf ;;
+        *) echo "Unexpected app host" >&2; exit 1 ;;
+    esac
+    test -s "$stage/nginx/sites-available/$site"
+    if [ "$site" != isureal.conf ]; then
+        # Validate the regional backend over the normal VPC route before switching ingress.
+        port=8081
+        [ "$host" != america1 ] || port=8082
+        code=$(curl --max-time 10 -s -o /dev/null -w '%{http_code}' "http://192.168.1.10:$port/api/me")
+        [ "$code" = 401 ] || { echo "Regional backend is not ready: HTTP $code" >&2; exit 1; }
+    fi
     backup=$(mktemp -d "$state/nginx-backup.XXXXXXXX")
     cp -p "$nginx/nginx.conf" "$backup/nginx.conf"
     cp -p "$nginx/sites-available/isureal.conf" "$backup/isureal.conf"
     # Keep the running config if the new one fails validation.
     sudo -n install -m 644 "$stage/nginx/nginx.conf" "$nginx/nginx.conf"
-    sudo -n install -m 644 "$stage/nginx/sites-available/isureal.conf" "$nginx/sites-available/isureal.conf"
+    sudo -n install -m 644 "$stage/nginx/sites-available/$site" "$nginx/sites-available/isureal.conf"
     if ! sudo -n nginx -t; then
         sudo -n install -m 644 "$backup/nginx.conf" "$nginx/nginx.conf"
         sudo -n install -m 644 "$backup/isureal.conf" "$nginx/sites-available/isureal.conf"

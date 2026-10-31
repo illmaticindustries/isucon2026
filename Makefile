@@ -13,7 +13,7 @@ help:
 	@echo 'After Enqueue: make measure [MEASURE_SECONDS=60]'
 	@echo 'Before Enqueue: make bench-reserve PORTAL_IDLE=yes; after completion: make bench-release PORTAL_IDLE=yes OPERATION_TOKEN=<token>'
 
-build deploy preflight rollback status logs deploy-indexes verify-indexes nginx-log alp nginx-deploy alp-install:
+regional-deploy build deploy preflight rollback status logs deploy-indexes verify-indexes nginx-log alp nginx-deploy alp-install:
 	python3 scripts/deploy.py $@ --ref "$$REF" --hosts "$$HOSTS"
 
 go-build-local: build
@@ -45,3 +45,5 @@ export MEASURE_SECONDS ?= 60
 .PHONY: measure
 measure:
 	python3 scripts/measure.py
+
+.PHONY: regional-deploy

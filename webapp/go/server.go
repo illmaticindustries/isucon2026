@@ -18,6 +18,26 @@ type HandlerContext struct {
 }
 
 func NewServer(config *Config) *echo.Echo {
+	return NewServerWithDB(config, OpenDatabase(config))
+}
+
+// OpenDatabase creates one pool shared by all regional listeners in this process.
+func OpenDatabase(config *Config) *sqlx.DB {
+	db, err := sqlx.Open("pgx", config.DatabaseDSN())
+	if err != nil {
+		panic("failed to open database: " + err.Error())
+	}
+	db.SetMaxOpenConns(30)
+	db.SetMaxIdleConns(30)
+	db.SetConnMaxLifetime(5 * time.Minute)
+	db.SetConnMaxIdleTime(time.Minute)
+	if err := db.Ping(); err != nil {
+		panic("failed to ping database: " + err.Error())
+	}
+	return db
+}
+
+func NewServerWithDB(config *Config, db *sqlx.DB) *echo.Echo {
 	if !validRegion(config.Region) {
 		panic("invalid server region: " + config.Region)
 	}
@@ -27,19 +47,6 @@ func NewServer(config *Config) *echo.Echo {
 	e.Use(ActionLogMiddleware(config.LogLevel, os.Stdout))
 	e.Use(middleware.Recover())
 	e.HTTPErrorHandler = APIErrorHandler
-
-	db, err := sqlx.Open("pgx", config.DatabaseDSN())
-	if err != nil {
-		panic("failed to open database: " + err.Error())
-	}
-	db.SetMaxOpenConns(30)
-	db.SetMaxIdleConns(30)
-	db.SetConnMaxLifetime(5 * time.Minute)
-	db.SetConnMaxIdleTime(time.Minute)
-	err = db.Ping()
-	if err != nil {
-		panic("failed to ping database: " + err.Error())
-	}
 
 	handlerContext := &HandlerContext{
 		DB:     db,
