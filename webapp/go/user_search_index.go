@@ -3,14 +3,17 @@ package isureal
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/jmoiron/sqlx"
 )
 
 // Unknown or stale derived values must pass the SQL prefilter. The existing Go
 // NFC/fold/NFC comparison remains the final authority, including during rollback.
-const searchCandidateQuery = `SELECT id, username, display_name FROM users
+var searchCandidateQuery = `SELECT ` + strings.Join(userColumns, ", ") + ` FROM users
  WHERE status='active' AND id<>$1 AND ($2='' OR (username,id)>($2,$3))
+ AND id NOT IN (SELECT blocked_id FROM block_relations WHERE blocker_id=$1
+                UNION ALL SELECT blocker_id FROM block_relations WHERE blocked_id=$1)
  AND (search_username_source IS DISTINCT FROM username
    OR search_display_name_source IS DISTINCT FROM display_name
    OR search_username_normalized IS NULL OR search_display_name_normalized IS NULL
