@@ -43,6 +43,11 @@ func normalizeSearchText(value string) string {
 	return normalized
 }
 
+// escapeLike escapes LIKE metacharacters so a user query matches literally.
+func escapeLike(value string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(value)
+}
+
 func searchUsersHandler(h *HandlerContext) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		var input searchUsersRequest
@@ -69,7 +74,10 @@ func searchUsersHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		defer tx.Rollback()
-		rows, err := tx.QueryContext(ctx, `SELECT id, username, display_name FROM users WHERE status='active' AND id<>$1 AND ($2='' OR (username,id)>($2,$3)) ORDER BY username, id`, viewer, input.BeforeUsername, input.BeforeID)
+		// A trigram index prefilter keeps the scan proportional to the matches.
+		// The Go check below (Unicode NFC + case fold) remains the source of truth.
+		pattern := "%" + escapeLike(input.Q) + "%"
+		rows, err := tx.QueryContext(ctx, `SELECT id, username, display_name FROM users WHERE status='active' AND id<>$1 AND ($2='' OR (username,id)>($2,$3)) AND (username ILIKE $4 OR display_name ILIKE $4) ORDER BY username, id`, viewer, input.BeforeUsername, input.BeforeID, pattern)
 		if err != nil {
 			return err
 		}

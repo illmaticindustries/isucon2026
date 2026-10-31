@@ -9,7 +9,7 @@ WHERE c.relnamespace = 'public'::regnamespace
     'realmojis_active_image_reactor', 'posts_active_image_author',
     'friendships_high_low', 'block_relations_blocked_blocker',
     'users_username', 'login_sessions_active_token', 'login_sessions_active_user',
-    'friend_requests_pending_pair'
+    'friend_requests_pending_pair', 'users_username_trgm', 'users_display_name_trgm'
   )
 ORDER BY c.relname;
 
@@ -21,7 +21,7 @@ BEGIN
       ('realmojis_active_image_reactor'), ('posts_active_image_author'),
       ('friendships_high_low'), ('block_relations_blocked_blocker'),
       ('users_username'), ('login_sessions_active_token'), ('login_sessions_active_user'),
-      ('friend_requests_pending_pair')
+      ('friend_requests_pending_pair'), ('users_username_trgm'), ('users_display_name_trgm')
     ) expected(name)
     LEFT JOIN pg_class c ON c.relname = expected.name
       AND c.relnamespace = 'public'::regnamespace

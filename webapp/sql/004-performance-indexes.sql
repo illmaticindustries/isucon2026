@@ -35,3 +35,14 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS login_sessions_active_user
 CREATE INDEX CONCURRENTLY IF NOT EXISTS friend_requests_pending_pair
   ON friend_requests (requester_id, recipient_id) INCLUDE (id)
   WHERE status = 'pending';
+
+-- User search prefilter (username/display_name ILIKE '%query%') must use an index
+-- instead of scanning every active user. The application still re-checks the
+-- Unicode-normalized match, so these are only a scan-narrowing prefilter.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS users_username_trgm
+  ON users USING gin (username gin_trgm_ops);
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS users_display_name_trgm
+  ON users USING gin (display_name gin_trgm_ops);
