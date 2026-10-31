@@ -127,8 +127,13 @@ func createLoginSessionTx(ctx context.Context, tx *sqlx.Tx, userID string) (*Ses
 	randomToken := uuid.NewString()
 	tokenHashBytes := sha256.Sum256([]byte(randomToken))
 	tokenHash := hex.EncodeToString(tokenHashBytes[:])
+	// Serialize session replacement per user; FOR SHARE still waits for deletion
+	// and profile/region updates without blocking on relationship changes.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('login-session:' || $1, 0))`, userID); err != nil {
+		return nil, fmt.Errorf("failed to lock sessions: %w", err)
+	}
 	var lockedUserID string
-	if err := tx.GetContext(ctx, &lockedUserID, `SELECT id FROM users WHERE id = $1 AND status = 'active' FOR NO KEY UPDATE`, userID); err != nil {
+	if err := tx.GetContext(ctx, &lockedUserID, `SELECT id FROM users WHERE id = $1 AND status = 'active' FOR SHARE`, userID); err != nil {
 		return nil, fmt.Errorf("failed to lock user: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
