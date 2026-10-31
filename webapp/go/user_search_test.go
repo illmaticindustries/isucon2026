@@ -19,9 +19,12 @@ import (
 )
 
 type searchTestState struct {
-	users   []User
-	blocked map[string]bool
-	rows    int
+	users         []User
+	blocked       map[string]bool
+	rows          int
+	queries       int
+	reads, closes int
+	failRead      bool
 }
 
 var searchTestCurrent *searchTestState
@@ -35,6 +38,23 @@ func (searchTestDriver) Open(string) (driver.Conn, error) {
 func (c *searchTestConn) Prepare(string) (driver.Stmt, error) { return nil, fmt.Errorf("unsupported") }
 func (c *searchTestConn) Close() error                        { return nil }
 func (c *searchTestConn) Begin() (driver.Tx, error)           { return nil, fmt.Errorf("unsupported") }
+
+type searchTestRows struct {
+	notificationRows
+	state *searchTestState
+}
+
+func (r *searchTestRows) Next(v []driver.Value) error {
+	if r.state.failRead && r.state.reads == 10 {
+		return fmt.Errorf("injected row read error")
+	}
+	err := r.notificationRows.Next(v)
+	if err == nil {
+		r.state.reads++
+	}
+	return err
+}
+func (r *searchTestRows) Close() error { r.state.closes++; return nil }
 func (c *searchTestConn) QueryContext(_ context.Context, q string, args []driver.NamedValue) (driver.Rows, error) {
 	s := c.state
 	if strings.Contains(q, "block_relations") {
@@ -44,6 +64,7 @@ func (c *searchTestConn) QueryContext(_ context.Context, q string, args []driver
 		}
 		return r, nil
 	}
+	s.queries++
 	r := &notificationRows{columns: userColumns}
 	if !strings.Contains(q, "ORDER BY username, id") {
 		return nil, fmt.Errorf("unexpected query: %s", q)
@@ -59,7 +80,7 @@ func (c *searchTestConn) QueryContext(_ context.Context, q string, args []driver
 		}
 	}
 	s.rows += len(r.values)
-	return r, nil
+	return &searchTestRows{*r, s}, nil
 }
 func init() { sql.Register("search-pagination-test", searchTestDriver{}) }
 
@@ -106,7 +127,9 @@ func TestSearchPaginationMatchesFullScan(t *testing.T) {
 				var actual []string
 				cursor := ""
 				cursorID := ""
+				pages := 0
 				for page := 0; ; page++ {
+					pages++
 					if page > 20 {
 						t.Fatal("pagination did not finish")
 					}
@@ -145,10 +168,48 @@ func TestSearchPaginationMatchesFullScan(t *testing.T) {
 				if !reflect.DeepEqual(actual, expected) {
 					t.Fatalf("got %v want %v", actual, expected)
 				}
-				if query == "user" && count == 600 && s.rows >= 600*10 {
-					t.Fatal("pagination repeatedly fetched entire table")
+				if s.queries != pages {
+					t.Fatalf("%d SQL queries for %d pages", s.queries, pages)
 				}
 			})
 		}
+	}
+}
+
+func TestSearchClosesRowsAndPropagatesReadErrors(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint(fail), func(t *testing.T) {
+			s := &searchTestState{blocked: map[string]bool{}, failRead: fail}
+			for i := range 600 {
+				id := fmt.Sprintf("user%04d", i)
+				s.users = append(s.users, User{ID: id, Username: id, SecretKeyHash: strings.Repeat("00", 32), Status: "active", AccountType: "normal"})
+			}
+			searchTestCurrent = s
+			db, err := sqlx.Open("search-pagination-test", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			e := echo.New()
+			e.HTTPErrorHandler = APIErrorHandler
+			e.GET("/api/users", func(c *echo.Context) error {
+				c.Set("session", &Session{UserID: "viewer"})
+				return searchUsersHandler(&HandlerContext{DB: db})(c)
+			})
+			r := httptest.NewRecorder()
+			e.ServeHTTP(r, httptest.NewRequest("GET", "/api/users?q=user", nil))
+			if fail {
+				if r.Code != 500 {
+					t.Fatalf("read error became HTTP %d", r.Code)
+				}
+			} else {
+				if r.Code != 200 || s.reads != 51 {
+					t.Fatalf("status=%d scanned=%d", r.Code, s.reads)
+				}
+			}
+			if s.queries != 1 || s.closes != 1 {
+				t.Fatalf("queries=%d closes=%d", s.queries, s.closes)
+			}
+		})
 	}
 }
