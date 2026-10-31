@@ -24,7 +24,7 @@ func ConfigFromEnv() *Config {
 		DBUser:     envOrDefault("ISUREAL_DB_USER", "isureal"),
 		DBPassword: envOrDefault("ISUREAL_DB_PASSWORD", "isureal"),
 		DBName:     envOrDefault("ISUREAL_DB_NAME", "isureal"),
-		LogLevel:   envOrDefault("ISUREAL_LOG_LEVEL", "debug"),
+		LogLevel:   envOrDefault("ISUREAL_LOG_LEVEL", "info"),
 	}
 }
 
