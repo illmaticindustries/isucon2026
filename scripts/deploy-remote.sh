@@ -75,6 +75,10 @@ nginx)
         # is ready before switching ingress off the previous configuration.
         code=$(curl --max-time 10 -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080/api/me")
         [ "$code" = 401 ] || { echo "Local backend is not ready: HTTP $code" >&2; exit 1; }
+        port=8081
+        [ "$host" != america1 ] || port=8082
+        code=$(curl --max-time 10 -s -o /dev/null -w '%{http_code}' -X POST "http://192.168.1.10:$port/api/friend-requests")
+        [ "$code" = 401 ] || { echo "Regional friend request backend is not ready: HTTP $code" >&2; exit 1; }
     fi
     backup=$(mktemp -d "$state/nginx-backup.XXXXXXXX")
     cp -p "$nginx/nginx.conf" "$backup/nginx.conf"
