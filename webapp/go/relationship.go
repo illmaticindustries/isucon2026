@@ -53,6 +53,12 @@ func isBlocked(ctx context.Context, db sqlx.QueryerContext, actor, target string
 	return blocked, err
 }
 
+func isFriend(ctx context.Context, db sqlx.QueryerContext, a, b string) (bool, error) {
+	var friend bool
+	err := sqlx.GetContext(ctx, db, &friend, `SELECT EXISTS(SELECT 1 FROM friendships WHERE user_low_id=$1 AND user_high_id=$2)`, min(a, b), max(a, b))
+	return friend, err
+}
+
 func insertFriendship(ctx context.Context, tx *sqlx.Tx, request FriendRequest) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO friendships (id, user_low_id, user_high_id, source_request_id) VALUES ($1,$2,$3,$4)`, uuid.NewString(), min(request.RequesterID, request.RecipientID), max(request.RequesterID, request.RecipientID), request.ID)
 	return err
