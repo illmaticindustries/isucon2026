@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,7 +14,6 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-const searchUserScanLimit = 200
 const normalizeSearchCacheLimit = 1 << 16
 
 var normalizeSearchCache sync.Map
@@ -64,38 +62,47 @@ func searchUsersHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		query := normalizeSearchText(input.Q)
-		items := make([]relationshipUserResponse, 0, 51)
-		cursorUsername, cursorID := input.BeforeUsername, input.BeforeID
-		for len(items) <= 50 {
-			var users []User
-			if err := h.DB.SelectContext(ctx, &users, `SELECT `+strings.Join(userColumns, ", ")+` FROM users WHERE status='active' AND id<>$1 AND ($2='' OR (username,id)>($2,$3)) ORDER BY username, id LIMIT `+strconv.Itoa(searchUserScanLimit), viewer, cursorUsername, cursorID); err != nil {
+		// Use one ordered query for a consistent snapshot. Repeating LIMIT/OFFSET
+		// or keyset queries is costly for selective Unicode searches, which may
+		// have to inspect the entire active-user set before finding 51 matches.
+		rows, err := h.DB.QueryxContext(ctx, `SELECT `+strings.Join(userColumns, ", ")+` FROM users WHERE status='active' AND id<>$1 AND ($2='' OR (username,id)>($2,$3)) ORDER BY username, id`, viewer, input.BeforeUsername, input.BeforeID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		users := make([]User, 0, 51)
+		for rows.Next() {
+			var user User
+			if err := rows.StructScan(&user); err != nil {
 				return err
 			}
-			if len(users) == 0 {
+			if blocked[user.ID] {
+				continue
+			}
+			if !strings.Contains(normalizeSearchText(user.Username), query) && !strings.Contains(normalizeSearchText(user.DisplayName), query) {
+				continue
+			}
+			users = append(users, user)
+			if len(users) == 51 {
 				break
 			}
-			for _, user := range users {
-				if !strings.Contains(normalizeSearchText(user.Username), query) && !strings.Contains(normalizeSearchText(user.DisplayName), query) {
-					continue
-				}
-				if blocked[user.ID] {
-					continue
-				}
-				if err := user.setImageKey(); err != nil {
-					return err
-				}
-				if user.AccountType != "certified_public" {
-					user.Bio = ""
-				}
-				items = append(items, newRelationshipUserResponse(user))
-				if len(items) == 51 {
-					break
-				}
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		// Release the database connection before computing response signatures.
+		items := make([]relationshipUserResponse, 0, len(users))
+		for _, user := range users {
+			if err := user.setImageKey(); err != nil {
+				return err
 			}
-			if len(users) < searchUserScanLimit {
-				break
+			if user.AccountType != "certified_public" {
+				user.Bio = ""
 			}
-			cursorUsername, cursorID = users[len(users)-1].Username, users[len(users)-1].ID
+			items = append(items, newRelationshipUserResponse(user))
 		}
 		hasMore := len(items) > 50
 		if hasMore {
