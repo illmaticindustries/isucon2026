@@ -74,18 +74,24 @@ func getFeedHandler(h *HandlerContext) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		posts, err := selectPostsWithAuthor(ctx, h.DB, `
-   AND p.author_id <> $1 AND w.ended_at IS NULL
+		eligibleAuthors := make([]string, 0, len(viewer.FriendsOfFriends))
+		if viewer.HasPostedToday {
+			for id := range viewer.FriendsOfFriends {
+				if id != viewer.ID && !viewer.Friends[id] && !viewer.Blocked[id] {
+					eligibleAuthors = append(eligibleAuthors, id)
+				}
+			}
+		}
+		if len(eligibleAuthors) == 0 {
+			return c.JSON(http.StatusOK, getFeedResponse{Items: []feedItemResponse{}})
+		}
+		candidates, err := selectPostsWithAuthor(ctx, h.DB, `
+   AND p.author_id = ANY($1::varchar[]) AND w.ended_at IS NULL
+   AND p.visibility IN ('public','friends_of_friends')
    ORDER BY p.posted_at DESC, p.id DESC
-  `, viewer.ID)
+  `, eligibleAuthors)
 		if err != nil {
 			return err
-		}
-		candidates := make([]PostWithAuthor, 0)
-		for _, post := range posts {
-			if viewer.canView(post.Post) && matchesFeed(viewer, nil, post.Post, input.Feed) {
-				candidates = append(candidates, post)
-			}
 		}
 		var scores map[string]int64
 		if ranked {
