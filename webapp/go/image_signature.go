@@ -79,6 +79,9 @@ func storeImageSignature(cacheKey signatureCacheKey, value [sha256.Size]byte) {
 
 func imageSignature(key []byte, imageID string, exp int64) []byte {
 	cacheKey := signatureCacheKey{key: string(key), imageID: imageID, exp: exp}
+	if prewarmedValue, ok := loadPrewarmedSignature(cacheKey); ok {
+		return prewarmedValue[:]
+	}
 	if cached, ok := loadImageSignature(cacheKey); ok {
 		return cached[:]
 	}

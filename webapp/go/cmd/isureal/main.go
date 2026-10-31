@@ -27,6 +27,8 @@ func main() {
 		// a different region. Traffic from remote nginx still follows the router.
 		listeners["192.168.1.10:8081"] = "europe"
 		listeners["192.168.1.10:8082"] = "america"
+		// This process serves every region, so it alone prepares image signatures.
+		isureal.StartSignaturePrewarm(ctx, db)
 	}
 	var wg sync.WaitGroup
 	errorsCh := make(chan error, len(listeners))
