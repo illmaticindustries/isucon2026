@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,8 +17,15 @@ import (
 	"github.com/labstack/echo/v5"
 )
 
+// notificationRecipientQueries counts recipient snapshot loads across connections.
+var notificationRecipientQueries atomic.Int64
+
 func (c *notificationConn) batchRows(now time.Time, q string, args []driver.NamedValue) (driver.Rows, error) {
 	if strings.Contains(q, "SELECT recipients") {
+		notificationRecipientQueries.Add(1)
+		if c.scenario == "batch-slow" {
+			time.Sleep(200 * time.Millisecond)
+		}
 		payload := `{"u1":"n-batch"}`
 		if c.scenario == "batch-late-recipient" || (c.scenario == "batch-second-window" && args[0].Value == "w-first") {
 			payload = `{"other-user":"n-other"}`
@@ -213,5 +221,71 @@ func TestNotificationBatchConcurrentReload(t *testing.T) {
 	wg.Wait()
 	if len(c.batches) != 1 {
 		t.Fatal("same window produced multiple cache entries")
+	}
+}
+
+func TestNotificationBatchLoadIsSharedAndUnlocked(t *testing.T) {
+	db, err := sqlx.Open("notification-test", "batch-slow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	c := notificationBatchCache{batches: map[string]map[string]string{"cached": {"u1": "n-cached"}}, generation: 1}
+	notificationRecipientQueries.Store(0)
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if id, err := c.recipient(context.Background(), db, 1, "w-slow", "u1"); err != nil || id != "n-batch" {
+				t.Errorf("id=%q error=%v", id, err)
+			}
+		}()
+	}
+	// While the slow load is in flight, a cached window must not wait for it.
+	time.Sleep(50 * time.Millisecond)
+	started := time.Now()
+	if id, err := c.recipient(context.Background(), db, 1, "cached", "u1"); err != nil || id != "n-cached" {
+		t.Fatalf("cached id=%q error=%v", id, err)
+	}
+	if elapsed := time.Since(started); elapsed > 50*time.Millisecond {
+		t.Fatalf("cached window waited %s for another window's load", elapsed)
+	}
+	wg.Wait()
+	if n := notificationRecipientQueries.Load(); n != 1 {
+		t.Fatalf("%d recipient queries for one window", n)
+	}
+}
+
+func TestNotificationBatchLeaderCancellationDoesNotFailWaiters(t *testing.T) {
+	db, err := sqlx.Open("notification-test", "batch-slow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	c := notificationBatchCache{batches: make(map[string]map[string]string)}
+	leaderCtx, cancel := context.WithCancel(context.Background())
+	leaderDone := make(chan struct{})
+	go func() {
+		defer close(leaderDone)
+		_, _ = c.recipient(leaderCtx, db, 1, "w-slow", "u1")
+	}()
+	time.Sleep(50 * time.Millisecond)
+	waiter := make(chan string, 1)
+	go func() {
+		id, err := c.recipient(context.Background(), db, 1, "w-slow", "u1")
+		if err != nil {
+			id = "error: " + err.Error()
+		}
+		waiter <- id
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	if id := <-waiter; id != "n-batch" {
+		t.Fatalf("waiter got %q after the leader was cancelled", id)
+	}
+	<-leaderDone
+	if id, err := c.recipient(context.Background(), db, 1, "w-slow", "u1"); err != nil || id != "n-batch" {
+		t.Fatal("loaded snapshot was not cached")
 	}
 }
