@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -22,12 +23,49 @@ func imageSigningKey(secretKeyHash string) ([]byte, error) {
 	return key, nil
 }
 
+// A signature is a pure function of all three inputs. Including the key keeps
+// cached signatures isolated across owners and key changes, including resets.
+type signatureCacheKey struct {
+	key     string
+	imageID string
+	exp     int64
+}
+
+const signatureCacheLimit = 8192
+
+var signatureCache = struct {
+	sync.Mutex
+	values map[signatureCacheKey][sha256.Size]byte
+}{values: make(map[signatureCacheKey][sha256.Size]byte)}
+
 func imageSignature(key []byte, imageID string, exp int64) []byte {
+	cacheKey := signatureCacheKey{key: string(key), imageID: imageID, exp: exp}
+	signatureCache.Lock()
+	cached, ok := signatureCache.values[cacheKey]
+	signatureCache.Unlock()
+	if ok {
+		return cached[:]
+	}
+	value := computeImageSignature(key, imageID, exp)
+	var stored [sha256.Size]byte
+	copy(stored[:], value)
+	signatureCache.Lock()
+	if len(signatureCache.values) >= signatureCacheLimit {
+		clear(signatureCache.values)
+	}
+	signatureCache.values[cacheKey] = stored
+	signatureCache.Unlock()
+	return value
+}
+
+func computeImageSignature(key []byte, imageID string, exp int64) []byte {
 	value := []byte(strconv.FormatInt(exp, 10) + ":" + imageID)
+	// Reset reuses the keyed HMAC state; the 1000-round signature is unchanged.
+	mac := hmac.New(sha256.New, key)
 	for range imageSignatureIterations {
-		mac := hmac.New(sha256.New, key)
-		mac.Write(value)
-		value = mac.Sum(nil)
+		mac.Reset()
+		_, _ = mac.Write(value)
+		value = mac.Sum(value[:0])
 	}
 	return value
 }
