@@ -27,8 +27,8 @@ func OpenDatabase(config *Config) *sqlx.DB {
 	if err != nil {
 		panic("failed to open database: " + err.Error())
 	}
-	db.SetMaxOpenConns(30)
-	db.SetMaxIdleConns(30)
+	db.SetMaxOpenConns(60)
+	db.SetMaxIdleConns(60)
 	db.SetConnMaxLifetime(5 * time.Minute)
 	db.SetConnMaxIdleTime(time.Minute)
 	if err := db.Ping(); err != nil {
