@@ -15,6 +15,13 @@ import (
 const imageURLLifetime = 24 * time.Hour
 const imageSignatureIterations = 1000
 
+// signatureCacheBucketWidth rounds the image signature expiry to a coarse time
+// bucket. Without it exp changes every second, so the signature cache below is
+// ineffective and every page render recomputes the 1000-round HMAC for each
+// image. With a stable bucket the signature is reused within the bucket while
+// exp stays roughly imageURLLifetime in the future.
+const signatureCacheBucketWidth = time.Hour
+
 var imageSigningKeyCache sync.Map
 
 func imageSigningKey(secretKeyHash string) ([]byte, error) {
@@ -37,7 +44,7 @@ type signatureCacheKey struct {
 	exp     int64
 }
 
-const signatureCacheLimit = 8192
+const signatureCacheLimit = 1 << 16
 
 var signatureCache = struct {
 	sync.Mutex
@@ -76,8 +83,17 @@ func computeImageSignature(key []byte, imageID string, exp int64) []byte {
 	return value
 }
 
+// imageSignatureExpiry returns the signature expiry for now, floored to
+// signatureCacheBucketWidth. It is always strictly in the future by between
+// imageURLLifetime-signatureCacheBucketWidth and imageURLLifetime, so generated
+// URLs stay valid for close to imageURLLifetime while being stable (and thus
+// cacheable) for the whole bucket.
+func imageSignatureExpiry(now time.Time) int64 {
+	return now.Truncate(signatureCacheBucketWidth).Add(imageURLLifetime).Unix()
+}
+
 func signedImageURL(user User, imageID string) string {
-	exp := time.Now().Add(imageURLLifetime).Unix()
+	exp := imageSignatureExpiry(time.Now())
 	query := url.Values{
 		"exp": {strconv.FormatInt(exp, 10)},
 		"sig": {base64.RawURLEncoding.EncodeToString(imageSignature(user.ImageKey, imageID, exp))},
