@@ -43,7 +43,11 @@ func openPostingWindowHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		defer tx.Rollback()
-		if _, err := tx.ExecContext(ctx, `LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+		// Serialize window changes only within this region. The previous
+		// users-table lock blocked every region's registrations and profile
+		// updates while this region snapshotted its recipients, so a single
+		// busy region (asia) stalled the others during the ramp.
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "posting-window:"+region); err != nil {
 			return err
 		}
 		var conflict bool
@@ -67,8 +71,8 @@ func openPostingWindowHandler(h *HandlerContext) echo.HandlerFunc {
   `, windowID, region, localDate, startsAt, startsAt.Add(time.Duration(seconds)*time.Second)); err != nil {
 			return err
 		}
-		// The users table lock still freezes eligibility at window creation.
 		// Persist all recipient IDs and notification UUIDs in one immutable row.
+		// The single-statement snapshot is consistent without a table lock.
 		if err := insertNotificationBatch(ctx, tx, region, windowID, startsAt); err != nil {
 			return err
 		}

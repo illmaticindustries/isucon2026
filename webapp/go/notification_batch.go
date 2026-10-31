@@ -12,8 +12,9 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-// Called inside the same transaction and users-table lock as window creation.
-// Eligibility cannot drift between the snapshot and commit.
+// Called inside the same transaction as window creation. The recipient list is
+// captured by a single SELECT, which is already a consistent READ COMMITTED
+// snapshot, so no table-wide lock is required.
 func insertNotificationBatch(ctx context.Context, tx *sqlx.Tx, region, windowID string, startsAt time.Time) error {
 	var ids []string
 	if err := tx.SelectContext(ctx, &ids, `SELECT id FROM users WHERE region=$1 AND status='active'`, region); err != nil {
