@@ -29,7 +29,7 @@ func ConfigFromEnv() *Config {
 		DBUser:     envOrDefault("ISUREAL_DB_USER", "isureal"),
 		DBPassword: envOrDefault("ISUREAL_DB_PASSWORD", "isureal"),
 		DBName:     envOrDefault("ISUREAL_DB_NAME", "isureal"),
-		LogLevel:   envOrDefault("ISUREAL_LOG_LEVEL", "debug"),
+		LogLevel:   envOrDefault("ISUREAL_LOG_LEVEL", "info"),
 	}
 	// Every app server serves its own region and keeps a local copy of the
 	// immutable image files, so all regions enable the file cache.
