@@ -33,16 +33,8 @@ func beginRelationshipTx(ctx context.Context, db *sqlx.DB, actor, target string)
 	if err != nil {
 		return nil, err
 	}
-	// Serialize changes of this pair only. FOR SHARE still keeps both users
-	// active against deletion and profile/region updates, but no longer queues
-	// every relationship, RealMoji and login of a popular user behind each other.
-	low, high := min(actor, target), max(actor, target)
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('relationship:' || $1 || ':' || $2, 0))`, low, high); err != nil {
-		tx.Rollback()
-		return nil, err
-	}
-	var lockedIDs []string
-	if err := tx.SelectContext(ctx, &lockedIDs, `SELECT id FROM users WHERE id IN ($1,$2) AND status='active' ORDER BY id FOR SHARE`, low, high); err != nil {
+	lockedIDs, err := lockRelationshipPair(ctx, tx, actor, target)
+	if err != nil {
 		tx.Rollback()
 		return nil, err
 	}
@@ -51,6 +43,21 @@ func beginRelationshipTx(ctx context.Context, db *sqlx.DB, actor, target string)
 		return nil, NewAPIError(http.StatusNotFound, "relationship_not_found")
 	}
 	return tx, nil
+}
+
+func lockRelationshipPair(ctx context.Context, tx *sqlx.Tx, actor, target string) ([]string, error) {
+	// Serialize changes of this pair only. FOR SHARE still keeps both users
+	// active against deletion and profile/region updates, but no longer queues
+	// every relationship, RealMoji and login of a popular user behind each other.
+	low, high := min(actor, target), max(actor, target)
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('relationship:' || $1 || ':' || $2, 0))`, low, high); err != nil {
+		return nil, err
+	}
+	var lockedIDs []string
+	if err := tx.SelectContext(ctx, &lockedIDs, `SELECT id FROM users WHERE id IN ($1,$2) AND status='active' ORDER BY id FOR SHARE`, low, high); err != nil {
+		return nil, err
+	}
+	return lockedIDs, nil
 }
 
 func isBlocked(ctx context.Context, db sqlx.QueryerContext, actor, target string) (bool, error) {

@@ -98,22 +98,26 @@ func replaceRealMojiHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		id := uuid.NewString()
-		if _, err := tx.ExecContext(ctx, `INSERT INTO realmojis(id,post_id,reactor_id,image_id,reaction_type,created_at) VALUES($1,$2,$3,$4,$5,clock_timestamp())`, id, post.ID, actor, imageID, input.ReactionType); err != nil {
-			return err
-		}
-		reaction, err := getRealMoji(ctx, tx, id)
+		var result RealMojiWithReactor
+		err = tx.GetContext(ctx, &result, `
+  WITH inserted AS (
+    INSERT INTO realmojis(id,post_id,reactor_id,image_id,reaction_type,created_at)
+    VALUES($1,$2,$3,$4,$5,clock_timestamp())
+    RETURNING id,post_id,reactor_id,image_id,reaction_type,created_at,replaced_at,deleted_at
+  )
+  SELECT inserted.*, `+userColumnsAs("u", "reactor")+`
+  FROM inserted JOIN users u ON u.id=inserted.reactor_id`, id, post.ID, actor, imageID, input.ReactionType)
 		if err != nil {
 			return err
 		}
-		user, err := getUser(ctx, tx, actor)
-		if err != nil {
+		if err := result.Reactor.setImageKey(); err != nil {
 			return err
 		}
 		if err := tx.Commit(); err != nil {
 			return err
 		}
 		h.ImageFiles.warmJPEG(written, imageID, data)
-		return c.JSON(http.StatusCreated, newRealMojiResponse(reaction, user))
+		return c.JSON(http.StatusCreated, newRealMojiResponse(result.RealMoji, result.Reactor))
 	}
 }
 

@@ -52,28 +52,15 @@ func followHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		defer tx.Rollback()
-		target, err := getUser(ctx, tx, input.UserID)
-		if err != nil {
-			return err
-		}
-		if target.AccountType != "certified_public" {
-			return NewAPIError(http.StatusConflict, "relationship_conflict")
-		}
-		blocked, err := isBlocked(ctx, tx, actor, target.ID)
-		if err != nil {
-			return err
-		}
-		if blocked {
-			return NewAPIError(http.StatusConflict, "relationship_conflict")
-		}
-		var exists bool
-		if err := tx.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM follows WHERE follower_id=$1 AND followee_id=$2)`, actor, target.ID); err != nil {
-			return err
-		}
-		if exists {
-			return NewAPIError(http.StatusConflict, "relationship_conflict")
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO follows (id, follower_id, followee_id) VALUES ($1,$2,$3)`, uuid.NewString(), actor, target.ID); err != nil {
+		result, err := tx.ExecContext(ctx, `
+   INSERT INTO follows (id, follower_id, followee_id)
+   SELECT $1::varchar,$2::varchar,u.id FROM users u
+   WHERE u.id=$3 AND u.account_type='certified_public' AND u.status='active'
+     AND NOT EXISTS (SELECT 1 FROM block_relations b
+       WHERE (b.blocker_id=$2 AND b.blocked_id=u.id)
+          OR (b.blocker_id=u.id AND b.blocked_id=$2))
+   ON CONFLICT (follower_id,followee_id) DO NOTHING`, uuid.NewString(), actor, input.UserID)
+		if err := requireRelationshipChange(result, err, http.StatusConflict, "relationship_conflict"); err != nil {
 			return err
 		}
 		if err := tx.Commit(); err != nil {
