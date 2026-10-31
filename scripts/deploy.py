@@ -31,6 +31,20 @@ def run(args, **kwargs):
 def output(args):
     return sp.check_output(args, text=True).strip()
 
+def ensure_app_schema(work, remote):
+    """Apply only additive schema files bundled in the pushed application REF.
+
+    Called under the same shared mutation reservation, after build/tests and
+    before activating any application host. Older REFs need no new tables.
+    """
+    command = '. /home/isucon/env.sh; export PGPASSWORD="$ISUREAL_DB_PASSWORD"; exec psql -X --no-password -v ON_ERROR_STOP=1 -h "$ISUREAL_DB_HOST" -p "$ISUREAL_DB_PORT" -U "$ISUREAL_DB_USER" -d "$ISUREAL_DB_NAME"'
+    for name in ('005-image-cache.sql', '006-notification-batches.sql'):
+        path = work / 'webapp/sql' / name
+        if path.exists():
+            print('asia2: required application schema ' + name, flush=True)
+            remote('asia2', 'bash -eu -c ' + shlex.quote(command), input=path.read_bytes())
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('action', choices=['regional-deploy', 'build', 'deploy', 'preflight', 'rollback', 'status', 'logs', 'deploy-indexes', 'verify-indexes', 'nginx-log', 'alp', 'enable-pgstats', 'alp-install', 'nginx-deploy', 'nginx-rotate', 'pgstats-reset', 'pg-tune', 'deploy-cache-schema', 'deploy-notification-schema'])
@@ -161,6 +175,7 @@ def main():
             if a.action == 'build':
                 print('Pushed revision builds and tests successfully.')
                 return
+            ensure_app_schema(work, remote)
             payload = work/'payload.tar'
             (work/'revision').write_text(rev + '\n')
             with tarfile.open(payload, 'w') as tar:

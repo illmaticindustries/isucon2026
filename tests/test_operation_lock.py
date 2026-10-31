@@ -50,6 +50,42 @@ class StateTest(unittest.TestCase):
                 change(root, 'acquire', 'new', {'kind': 'deploy'})
 
 
+class ApplicationSchemaTest(unittest.TestCase):
+    def test_old_reference_does_not_apply_unrelated_schema(self):
+        with tempfile.TemporaryDirectory() as d:
+            work = Path(d)
+            sql = work / 'webapp/sql'
+            sql.mkdir(parents=True)
+            (sql / '001-schema.sql').write_text('DROP TABLE users;')
+            with patch.object(deploy, 'run') as remote:
+                deploy.ensure_app_schema(work, remote)
+                remote.assert_not_called()
+
+    def test_only_bundled_additive_files_apply_in_order(self):
+        with tempfile.TemporaryDirectory() as d:
+            work = Path(d)
+            sql = work / 'webapp/sql'
+            sql.mkdir(parents=True)
+            (sql / '005-image-cache.sql').write_text('first')
+            (sql / '006-notification-batches.sql').write_text('second')
+            calls = []
+            deploy.ensure_app_schema(work, lambda host, command, **kwargs: calls.append((host, command, kwargs['input'])))
+            self.assertEqual([(c[0], c[2]) for c in calls], [('asia2', b'first'), ('asia2', b'second')])
+            self.assertTrue(all('ON_ERROR_STOP=1' in c[1] for c in calls))
+
+    def test_schema_failure_stops_before_next_step(self):
+        with tempfile.TemporaryDirectory() as d:
+            work = Path(d)
+            sql = work / 'webapp/sql'
+            sql.mkdir(parents=True)
+            (sql / '005-image-cache.sql').write_text('first')
+            (sql / '006-notification-batches.sql').write_text('second')
+            with patch.object(deploy, 'run', side_effect=subprocess.CalledProcessError(1, 'psql')) as remote:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    deploy.ensure_app_schema(work, remote)
+                self.assertEqual(remote.call_count, 1)
+
+
 class WorkflowTest(unittest.TestCase):
     def test_portal_confirmation_required_before_network(self):
         with patch.dict(os.environ, {'PORTAL_IDLE': 'no'}), patch.object(operation_lock, 'request') as request:

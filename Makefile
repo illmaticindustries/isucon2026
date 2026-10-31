@@ -11,6 +11,7 @@ help:
 	@echo 'make deploy-notification-schema REF=<pushed commit> PORTAL_IDLE=yes (before first notification-batch deployment)'
 	@echo 'make deploy-cache-schema REF=<pushed commit> PORTAL_IDLE=yes (before first image-cache app deployment)'
 	@echo 'make nginx-deploy REF=<pushed commit> | alp-install | alp | nginx-log [HOSTS=...]'
+	@echo 'deploy/regional-deploy automatically apply bundled additive app schemas on asia2 before app activation.'
 	@echo 'Mutations require PORTAL_IDLE=yes after checking the portal.'
 	@echo 'After Enqueue: make measure [MEASURE_SECONDS=60]'
 	@echo 'Before Enqueue: make bench-reserve PORTAL_IDLE=yes; after completion: make bench-release PORTAL_IDLE=yes OPERATION_TOKEN=<token>'
