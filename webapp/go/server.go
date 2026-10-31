@@ -12,9 +12,10 @@ import (
 )
 
 type HandlerContext struct {
-	DB     *sqlx.DB
-	Config *Config
-	IPBans *IPBanList
+	DB         *sqlx.DB
+	Config     *Config
+	IPBans     *IPBanList
+	ImageFiles *imageFileStore
 }
 
 func NewServer(config *Config) *echo.Echo {
@@ -52,9 +53,10 @@ func NewServerWithDB(config *Config, db *sqlx.DB) *echo.Echo {
 	e.HTTPErrorHandler = APIErrorHandler
 
 	handlerContext := &HandlerContext{
-		DB:     db,
-		Config: config,
-		IPBans: &IPBanList{},
+		DB:         db,
+		Config:     config,
+		IPBans:     &IPBanList{},
+		ImageFiles: config.ImageFiles,
 	}
 	e.Use(IPBanMiddleware(handlerContext))
 

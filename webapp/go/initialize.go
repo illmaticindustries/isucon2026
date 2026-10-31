@@ -30,6 +30,15 @@ func initializeHandler(h *HandlerContext) echo.HandlerFunc {
 		if err := rebuildUserSearchIndex(c.Request().Context(), h.DB); err != nil {
 			return err
 		}
+		if h.ImageFiles != nil {
+			var epoch int64
+			if err := h.DB.GetContext(c.Request().Context(), &epoch, `SELECT generation FROM image_cache_generation`); err != nil {
+				return err
+			}
+			if err := h.ImageFiles.reset(epoch); err != nil {
+				return err
+			}
+		}
 
 		// Set language to the implementation language.
 		// Agents optimizing this app: set agent, harness, and model to the names used.

@@ -76,6 +76,12 @@ nginx)
         [ "$host" != america1 ] || port=8082
         code=$(curl --max-time 10 -s -o /dev/null -w '%{http_code}' "http://192.168.1.10:$port/api/me")
         [ "$code" = 401 ] || { echo "Regional backend is not ready: HTTP $code" >&2; exit 1; }
+        if grep -q '_image_origin' "$stage/nginx/sites-available/$site"; then
+            # Inspect the app's JSON, since an nginx ACL denial is also a 403.
+            image_port=$((port + 10))
+            reply=$(curl --max-time 10 -s "http://192.168.1.10:$image_port/api/images/route-check")
+            [[ "$reply" == *'"image_forbidden"'* ]] || { echo "Private image origin is not ready" >&2; exit 1; }
+        fi
     fi
     backup=$(mktemp -d "$state/nginx-backup.XXXXXXXX")
     cp -p "$nginx/nginx.conf" "$backup/nginx.conf"
