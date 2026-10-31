@@ -67,10 +67,9 @@ func openPostingWindowHandler(h *HandlerContext) echo.HandlerFunc {
   `, windowID, region, localDate, startsAt, startsAt.Add(time.Duration(seconds)*time.Second)); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `
-   INSERT INTO notifications (id, user_id, posting_window_id, created_at)
-   SELECT gen_random_uuid()::text, id, $2, $3 FROM users WHERE region = $1 AND status = 'active'
-  `, region, windowID, startsAt); err != nil {
+		// The users table lock still freezes eligibility at window creation.
+		// Persist all recipient IDs and notification UUIDs in one immutable row.
+		if err := insertNotificationBatch(ctx, tx, region, windowID, startsAt); err != nil {
 			return err
 		}
 		window, err := getPostingWindow(ctx, tx, windowID)

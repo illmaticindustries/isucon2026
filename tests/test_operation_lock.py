@@ -80,8 +80,8 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(events, ['acquire'])
 
     def test_busy_reservation_stops_all_mutation_entry_points(self):
-        for action in ('deploy', 'rollback', 'deploy-indexes', 'enable-pgstats', 'pg-tune', 'deploy-cache-schema'):
-            with self.subTest(action=action), patch.dict(os.environ, {'PORTAL_IDLE': 'yes'}), patch.object(operation_lock, 'request', side_effect=RuntimeError('busy')), patch.object(deploy, 'run') as run, patch.object(sys, 'argv', ['deploy.py', action, '--hosts', 'asia2' if action in ('deploy-indexes', 'enable-pgstats', 'pg-tune', 'deploy-cache-schema') else 'asia1']):
+        for action in ('deploy', 'rollback', 'deploy-indexes', 'enable-pgstats', 'pg-tune', 'deploy-cache-schema', 'deploy-notification-schema'):
+            with self.subTest(action=action), patch.dict(os.environ, {'PORTAL_IDLE': 'yes'}), patch.object(operation_lock, 'request', side_effect=RuntimeError('busy')), patch.object(deploy, 'run') as run, patch.object(sys, 'argv', ['deploy.py', action, '--hosts', 'asia2' if action in ('deploy-indexes', 'enable-pgstats', 'pg-tune', 'deploy-cache-schema', 'deploy-notification-schema') else 'asia1']):
                 with self.assertRaisesRegex(RuntimeError, 'busy'):
                     deploy.main()
                 run.assert_not_called()
