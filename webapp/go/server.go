@@ -31,8 +31,8 @@ func OpenDatabase(config *Config) *sqlx.DB {
 	// All regional listeners in this process share one pool. 30 saturated under
 	// load (database/sql WaitCount grew large with ~200ms average waits while the
 	// database itself had CPU headroom), so allow more concurrent queries.
-	db.SetMaxOpenConns(60)
-	db.SetMaxIdleConns(60)
+	db.SetMaxOpenConns(150)
+	db.SetMaxIdleConns(150)
 	db.SetConnMaxLifetime(5 * time.Minute)
 	db.SetConnMaxIdleTime(time.Minute)
 	if err := db.Ping(); err != nil {
