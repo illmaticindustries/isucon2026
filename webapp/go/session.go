@@ -32,7 +32,7 @@ func GetSession(c *echo.Context) *Session {
 	return sess
 }
 
-func getSessionFromHeader(c *echo.Context, db *sqlx.DB) (*Session, error) {
+func getSessionFromHeader(c *echo.Context, db *sqlx.DB, forwarded bool) (*Session, error) {
 	authHeader := c.Request().Header.Get(echo.HeaderAuthorization)
 	if authHeader == "" {
 		return nil, nil
@@ -46,11 +46,11 @@ func getSessionFromHeader(c *echo.Context, db *sqlx.DB) (*Session, error) {
 
 	tokenHashBytes := sha256.Sum256([]byte(token))
 	tokenHash := hex.EncodeToString(tokenHashBytes[:])
-	// Cache session reads for GET requests only. Every cross-process route
-	// (friend requests) is a POST, so a logout or deletion performed here can
-	// always be seen there; caching reads keeps "use the token after logout is
-	// 401" true on whichever host served the logout.
-	cacheable := c.Request().Method == http.MethodGet
+	// Cache session reads for GET requests only, and never on a forwarded
+	// listener: logins, logouts and deletions run in the region's own process,
+	// which is the only one that invalidates its cache immediately. This keeps
+	// "use the token after logout is 401" true on every route, forwarded or not.
+	cacheable := c.Request().Method == http.MethodGet && !forwarded
 	if cacheable {
 		if session, ok := loadCachedSession(tokenHash); ok {
 			return session, nil
@@ -78,7 +78,7 @@ func getSessionFromHeader(c *echo.Context, db *sqlx.DB) (*Session, error) {
 func SessionMiddleware(handlerContext *HandlerContext, authRequired bool) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
-			session, err := getSessionFromHeader(c, handlerContext.DB)
+			session, err := getSessionFromHeader(c, handlerContext.DB, handlerContext.Config.Forwarded)
 			if err != nil {
 				return err
 			}

@@ -1,8 +1,15 @@
 package isureal
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/jmoiron/sqlx"
+	"github.com/labstack/echo/v5"
 )
 
 func TestSessionCacheStoreLoadAndInvalidate(t *testing.T) {
@@ -47,5 +54,33 @@ func TestSessionCacheExpiry(t *testing.T) {
 	})
 	if _, ok := loadCachedSession("expired"); ok {
 		t.Fatal("expired entry served")
+	}
+}
+
+// A forwarded listener must read the database even when this process holds a
+// cached session: the region's own process may have logged that token out.
+func TestForwardedListenerBypassesSessionCache(t *testing.T) {
+	clearSessionCache()
+	defer clearSessionCache()
+	db, err := sqlx.Open("pgx", "postgres://user:pass@127.0.0.1:1/unreachable?connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	token := "stale-token"
+	hash := sha256.Sum256([]byte(token))
+	tokenHash := hex.EncodeToString(hash[:])
+	storeCachedSession(tokenHash, &Session{UserID: "u1", TokenHash: tokenHash, Region: "europe"})
+
+	newContext := func() *echo.Context {
+		req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+		req.Header.Set(echo.HeaderAuthorization, "Bearer "+token)
+		return echo.New().NewContext(req, httptest.NewRecorder())
+	}
+	if session, err := getSessionFromHeader(newContext(), db, false); err != nil || session == nil || session.UserID != "u1" {
+		t.Fatalf("own-region listener: session %+v err %v, want cached session", session, err)
+	}
+	if session, err := getSessionFromHeader(newContext(), db, true); err == nil {
+		t.Fatalf("forwarded listener served %+v from the cache", session)
 	}
 }

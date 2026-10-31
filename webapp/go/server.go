@@ -22,23 +22,40 @@ func NewServer(config *Config) *echo.Echo {
 	return NewServerWithDB(config, OpenDatabase(config))
 }
 
-// OpenDatabase creates one pool shared by all regional listeners in this process.
+// forwardedPoolSize bounds the pool of each listener that serves another
+// region's forwarded requests. Those regions have few users (europe1 and
+// america1 never used more than 13 connections for all of their traffic).
+const forwardedPoolSize = 15
+
+// OpenDatabase creates the pool for this host's own region; /debug/dbstats
+// reports it. 30 saturated under load (database/sql WaitCount grew large with
+// ~200ms average waits while the database itself had CPU headroom), and 150
+// made the database thrash, so allow 60 concurrent queries.
 func OpenDatabase(config *Config) *sqlx.DB {
+	db := openDatabase(config, 60)
+	diagnosticDB.Store(db.DB)
+	return db
+}
+
+// OpenForwardedDatabase creates a separate pool for a listener that serves
+// another region's forwarded requests, so they do not queue behind this
+// region's saturated pool.
+func OpenForwardedDatabase(config *Config) *sqlx.DB {
+	return openDatabase(config, forwardedPoolSize)
+}
+
+func openDatabase(config *Config, maxConns int) *sqlx.DB {
 	db, err := sqlx.Open("pgx", config.DatabaseDSN())
 	if err != nil {
 		panic("failed to open database: " + err.Error())
 	}
-	// All regional listeners in this process share one pool. 30 saturated under
-	// load (database/sql WaitCount grew large with ~200ms average waits while the
-	// database itself had CPU headroom), so allow more concurrent queries.
-	db.SetMaxOpenConns(60)
-	db.SetMaxIdleConns(60)
+	db.SetMaxOpenConns(maxConns)
+	db.SetMaxIdleConns(maxConns)
 	db.SetConnMaxLifetime(5 * time.Minute)
 	db.SetConnMaxIdleTime(time.Minute)
 	if err := db.Ping(); err != nil {
 		panic("failed to ping database: " + err.Error())
 	}
-	diagnosticDB.Store(db.DB)
 	return db
 }
 
