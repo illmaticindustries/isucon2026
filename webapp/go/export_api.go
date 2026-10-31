@@ -31,7 +31,8 @@ func exportPostsHandler(h *HandlerContext) echo.HandlerFunc {
    SELECT `+postColumns+`, i.data AS image_data
    FROM posts p
    JOIN posting_windows w ON w.id = p.posting_window_id
-   JOIN image_objects i ON i.id = p.image_id
+   -- A post image is stored with created_at = posted_at, so this prunes to one partition instead of probing all.
+   JOIN image_objects i ON i.id = p.image_id AND i.created_at = p.posted_at
    WHERE p.author_id = $1 AND p.deleted_at IS NULL
    ORDER BY p.posted_at, p.id
   `, userID); err != nil {
