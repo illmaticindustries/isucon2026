@@ -70,8 +70,9 @@ class ApplicationSchemaTest(unittest.TestCase):
             (sql / '006-notification-batches.sql').write_text('second')
             calls = []
             (sql / '007-user-search.sql').write_text('third')
+            (sql / '009-image-storage-external.sql').write_text('fourth')
             deploy.ensure_app_schema(work, lambda host, command, **kwargs: calls.append((host, command, kwargs['input'])))
-            self.assertEqual([(c[0], c[2]) for c in calls], [('asia2', b'first'), ('asia2', b'second'), ('asia2', b'third')])
+            self.assertEqual([(c[0], c[2]) for c in calls], [('asia2', b'first'), ('asia2', b'second'), ('asia2', b'third'), ('asia2', b'fourth')])
             self.assertTrue(all('ON_ERROR_STOP=1' in c[1] for c in calls))
 
     def test_schema_failure_stops_before_next_step(self):
