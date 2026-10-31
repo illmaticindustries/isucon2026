@@ -18,9 +18,9 @@ GO = '/home/isucon/local/go/bin/go'
 SECONDS = int(os.environ.get('MEASURE_SECONDS', '60'))
 
 
-def ssh(name, command):
+def ssh(name, command, input=None):
     options = shlex.split(os.environ.get('SSH_OPTIONS', '-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes'))
-    result = sp.run(['ssh', *options, 'isucon@' + HOSTS[name], command], capture_output=True, text=True)
+    result = sp.run(['ssh', *options, 'isucon@' + HOSTS[name], command], input=input, capture_output=True, text=True)
     if result.returncode:
         return result.stdout + '\n[exit ' + str(result.returncode) + '] ' + result.stderr
     return result.stdout
@@ -35,6 +35,40 @@ def pprof(name):
     return ssh(name, f'mkdir -p ~/pprof && f=~/pprof/cpu-$(date -u +%Y%m%dT%H%M%SZ).pb.gz'
                      f' && curl -sf -o "$f" "http://127.0.0.1:6060/debug/pprof/profile?seconds={SECONDS}"'
                      f' && echo "saved: $f" && {GO} tool pprof -top -nodecount=25 "$f" 2>/dev/null')
+
+def dbpool(name):
+    return ssh(name, f'python3 - {SECONDS}', input=(ROOT / 'scripts/pool_sample.py').read_text())
+
+
+def wait_profiles(name):
+    # Delta profiles cover this collection interval, not process lifetime.
+    # Run block/mutex/goroutine collection concurrently with the CPU profile.
+    command = f'''set -eu
+mkdir -p ~/pprof
+prefix=~/pprof/wait-$(date -u +%Y%m%dT%H%M%SZ)
+curl --max-time 5 -fsS -o "$prefix-config.json" 'http://127.0.0.1:6060/debug/dbstats'
+echo '# process identity and sampling rates'
+cat "$prefix-config.json"
+curl --max-time {SECONDS + 15} -fsS -o "$prefix-block.pb.gz" 'http://127.0.0.1:6060/debug/pprof/block?seconds={SECONDS}' &
+block_pid=$!
+curl --max-time {SECONDS + 15} -fsS -o "$prefix-mutex.pb.gz" 'http://127.0.0.1:6060/debug/pprof/mutex?seconds={SECONDS}' &
+mutex_pid=$!
+(sleep {SECONDS // 2}; curl --max-time 5 -fsS -o "$prefix-goroutine.txt" 'http://127.0.0.1:6060/debug/pprof/goroutine?debug=1') &
+goroutine_pid=$!
+failed=0
+wait "$block_pid" || failed=1
+wait "$mutex_pid" || failed=1
+wait "$goroutine_pid" || failed=1
+echo "saved prefix: $prefix"
+test "$failed" = 0
+for kind in block mutex; do
+  echo "# $kind delta ({SECONDS}s)"
+  {GO} tool pprof -top -nodecount=20 "$prefix-$kind.pb.gz" 2>/dev/null
+done
+echo '# mid-load goroutine stacks'
+cat "$prefix-goroutine.txt"
+'''
+    return ssh(name, command)
 
 
 def alp(name):
@@ -86,13 +120,19 @@ def pgstats(name):
 
 
 def main():
+    if not 1 <= SECONDS <= 300:
+        raise ValueError('MEASURE_SECONDS must be 1..300')
     out = ROOT / 'measure' / datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
     out.mkdir(parents=True)
     print(f'Measuring {SECONDS}s of load into {out}', flush=True)
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    # All 14 duration-based collectors must start together, without queueing
+    # the diagnostic samples behind the 60-second CPU/top collectors.
+    with ThreadPoolExecutor(max_workers=14) as pool:
         during = {f'top-{n}': pool.submit(top, n) for n in [*APPS, DB]}
         during.update({f'pprof-{n}': pool.submit(pprof, n) for n in APPS})
         during['dbwait-' + DB] = pool.submit(dbwait, DB)
+        during.update({f'dbpool-{n}': pool.submit(dbpool, n) for n in APPS})
+        during.update({f'wait-pprof-{n}': pool.submit(wait_profiles, n) for n in APPS})
         for key, future in during.items():
             (out / f'{key}.txt').write_text(future.result())
         after = {f'alp-{n}': pool.submit(alp, n) for n in APPS}
