@@ -12,11 +12,24 @@ import (
 )
 
 type HandlerContext struct {
-	DB           *sqlx.DB
+	DB *sqlx.DB
+	// DBReplica serves read-only handlers. It is nil unless a replica host is
+	// configured, in which case ReadDB returns it; otherwise ReadDB falls back
+	// to DB so behaviour is unchanged without a replica.
+	DBReplica    *sqlx.DB
 	Config       *Config
 	IPBans       *IPBanList
 	ImageFiles   *imageFileStore
 	sessionReads readBatch[string, *Session]
+}
+
+// ReadDB returns the pool that read-only handlers must use. Session reads,
+// writes and audit/lock paths stay on DB (the primary).
+func (h *HandlerContext) ReadDB() *sqlx.DB {
+	if h.DBReplica != nil {
+		return h.DBReplica
+	}
+	return h.DB
 }
 
 func NewServer(config *Config) *echo.Echo {
@@ -43,6 +56,29 @@ func OpenDatabase(config *Config) *sqlx.DB {
 // region's saturated pool.
 func OpenForwardedDatabase(config *Config) *sqlx.DB {
 	return openDatabase(config, forwardedPoolSize)
+}
+
+// OpenReplicaDatabase opens the pool for read-only handlers against a local
+// streaming replica. It returns nil when no replica is configured or the
+// replica is unreachable, so ReadDB falls back to the primary and a replica
+// outage never takes the app down.
+func OpenReplicaDatabase(config *Config) *sqlx.DB {
+	if config.DBReplicaHost == "" {
+		return nil
+	}
+	db, err := sqlx.Open("pgx", config.ReplicaDatabaseDSN())
+	if err != nil {
+		return nil
+	}
+	db.SetMaxOpenConns(60)
+	db.SetMaxIdleConns(60)
+	db.SetConnMaxLifetime(5 * time.Minute)
+	db.SetConnMaxIdleTime(time.Minute)
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil
+	}
+	return db
 }
 
 func openDatabase(config *Config, maxConns int) *sqlx.DB {
@@ -76,6 +112,7 @@ func NewServerWithDB(config *Config, db *sqlx.DB) *echo.Echo {
 
 	handlerContext := &HandlerContext{
 		DB:         db,
+		DBReplica:  OpenReplicaDatabase(config),
 		Config:     config,
 		IPBans:     &IPBanList{},
 		ImageFiles: config.ImageFiles,

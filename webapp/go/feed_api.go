@@ -49,7 +49,7 @@ func getFeedHandler(h *HandlerContext) echo.HandlerFunc {
 		}
 		ctx := c.Request().Context()
 		if !ranked {
-			posts, err := selectChronologicalFeed(ctx, h.DB, GetSession(c).UserID, input)
+			posts, err := selectChronologicalFeed(ctx, h.ReadDB(), GetSession(c).UserID, input)
 			if err != nil {
 				return err
 			}
@@ -67,7 +67,7 @@ func getFeedHandler(h *HandlerContext) echo.HandlerFunc {
 			return c.JSON(http.StatusOK, getFeedResponse{Items: items, HasMore: hasMore})
 		}
 		// Ranked feeds need every eligible candidate before sorting by score.
-		viewer, err := loadViewerContext(ctx, h.DB, GetSession(c).UserID)
+		viewer, err := loadViewerContext(ctx, h.ReadDB(), GetSession(c).UserID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return c.JSON(http.StatusOK, getFeedResponse{Items: []feedItemResponse{}})
 		}
@@ -85,7 +85,7 @@ func getFeedHandler(h *HandlerContext) echo.HandlerFunc {
 		if len(eligibleAuthors) == 0 {
 			return c.JSON(http.StatusOK, getFeedResponse{Items: []feedItemResponse{}})
 		}
-		candidates, err := selectPostsWithAuthor(ctx, h.DB, `
+		candidates, err := selectPostsWithAuthor(ctx, h.ReadDB(), `
    AND p.author_id = ANY($1::varchar[]) AND w.ended_at IS NULL
    AND p.visibility IN ('public','friends_of_friends')
    ORDER BY p.posted_at DESC, p.id DESC
@@ -95,7 +95,7 @@ func getFeedHandler(h *HandlerContext) echo.HandlerFunc {
 		}
 		var scores map[string]int64
 		if ranked {
-			if scores, err = recommendationScores(ctx, h.DB, viewer, candidates); err != nil {
+			if scores, err = recommendationScores(ctx, h.ReadDB(), viewer, candidates); err != nil {
 				return err
 			}
 			sort.SliceStable(candidates, func(i, j int) bool {

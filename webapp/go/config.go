@@ -13,8 +13,12 @@ type Config struct {
 	DBUser     string
 	DBPassword string
 	DBName     string
-	LogLevel   string
-	ImageFiles *imageFileStore
+	// DBReplicaHost optionally points read-only queries at a local streaming
+	// replica. Empty means the replica pool falls back to the primary.
+	DBReplicaHost string
+	DBReplicaPort string
+	LogLevel      string
+	ImageFiles    *imageFileStore
 	// Forwarded marks a listener that serves another region's requests relayed
 	// by that region's nginx. Logins, logouts and deletions for that region run
 	// in a different process, so this listener must not cache sessions.
@@ -23,13 +27,15 @@ type Config struct {
 
 func ConfigFromEnv() *Config {
 	c := &Config{
-		Region:     envOrDefault("ISUREAL_REGION", "asia"),
-		DBHost:     envOrDefault("ISUREAL_DB_HOST", "127.0.0.1"),
-		DBPort:     envOrDefault("ISUREAL_DB_PORT", "5432"),
-		DBUser:     envOrDefault("ISUREAL_DB_USER", "isureal"),
-		DBPassword: envOrDefault("ISUREAL_DB_PASSWORD", "isureal"),
-		DBName:     envOrDefault("ISUREAL_DB_NAME", "isureal"),
-		LogLevel:   envOrDefault("ISUREAL_LOG_LEVEL", "info"),
+		Region:        envOrDefault("ISUREAL_REGION", "asia"),
+		DBHost:        envOrDefault("ISUREAL_DB_HOST", "127.0.0.1"),
+		DBPort:        envOrDefault("ISUREAL_DB_PORT", "5432"),
+		DBUser:        envOrDefault("ISUREAL_DB_USER", "isureal"),
+		DBPassword:    envOrDefault("ISUREAL_DB_PASSWORD", "isureal"),
+		DBName:        envOrDefault("ISUREAL_DB_NAME", "isureal"),
+		DBReplicaHost: envOrDefault("ISUREAL_DB_REPLICA_HOST", ""),
+		DBReplicaPort: envOrDefault("ISUREAL_DB_REPLICA_PORT", envOrDefault("ISUREAL_DB_PORT", "5432")),
+		LogLevel:      envOrDefault("ISUREAL_LOG_LEVEL", "info"),
 	}
 	// Every app server serves its own region and keeps a local copy of the
 	// immutable image files, so all regions enable the file cache.
@@ -38,10 +44,23 @@ func ConfigFromEnv() *Config {
 }
 
 func (c *Config) DatabaseDSN() string {
+	return c.dsn(c.DBHost, c.DBPort)
+}
+
+// ReplicaDatabaseDSN returns the DSN for the read replica, or the primary DSN
+// when no replica host is configured.
+func (c *Config) ReplicaDatabaseDSN() string {
+	if c.DBReplicaHost == "" {
+		return c.DatabaseDSN()
+	}
+	return c.dsn(c.DBReplicaHost, c.DBReplicaPort)
+}
+
+func (c *Config) dsn(host, port string) string {
 	u := url.URL{
 		Scheme: "postgres",
 		User:   url.UserPassword(c.DBUser, c.DBPassword),
-		Host:   net.JoinHostPort(c.DBHost, c.DBPort),
+		Host:   net.JoinHostPort(host, port),
 		Path:   "/" + c.DBName,
 	}
 	return u.String()
