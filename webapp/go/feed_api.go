@@ -48,6 +48,25 @@ func getFeedHandler(h *HandlerContext) echo.HandlerFunc {
 			return NewAPIError(http.StatusBadRequest, "invalid_pagination")
 		}
 		ctx := c.Request().Context()
+		if !ranked {
+			posts, err := selectChronologicalFeed(ctx, h.DB, GetSession(c).UserID, input)
+			if err != nil {
+				return err
+			}
+			hasMore := len(posts) > 50
+			if hasMore {
+				posts = posts[:50]
+			}
+			items := make([]feedItemResponse, 0, len(posts))
+			for _, post := range posts {
+				if err := post.Author.setImageKey(); err != nil {
+					return err
+				}
+				items = append(items, feedItemResponse{createPostResponse: newPostResponse(post.Post, post.Author)})
+			}
+			return c.JSON(http.StatusOK, getFeedResponse{Items: items, HasMore: hasMore})
+		}
+		// Ranked feeds need every eligible candidate before sorting by score.
 		viewer, err := loadViewerContext(ctx, h.DB, GetSession(c).UserID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return c.JSON(http.StatusOK, getFeedResponse{Items: []feedItemResponse{}})
@@ -55,31 +74,16 @@ func getFeedHandler(h *HandlerContext) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		following := map[string]bool{}
-		if input.Feed == "following" {
-			var followeeIDs []string
-			if err := h.DB.SelectContext(ctx, &followeeIDs, `SELECT followee_id FROM follows WHERE follower_id = $1`, viewer.ID); err != nil {
-				return err
-			}
-			for _, id := range followeeIDs {
-				following[id] = true
-			}
-		}
-		beforePostedAt, beforeID := input.BeforePostedAt, input.BeforeID
-		if ranked {
-			beforePostedAt, beforeID = nil, ""
-		}
 		posts, err := selectPostsWithAuthor(ctx, h.DB, `
    AND p.author_id <> $1 AND w.ended_at IS NULL
-   AND ($2::timestamptz IS NULL OR (p.posted_at, p.id) < ($2, $3))
    ORDER BY p.posted_at DESC, p.id DESC
-  `, viewer.ID, beforePostedAt, beforeID)
+  `, viewer.ID)
 		if err != nil {
 			return err
 		}
 		candidates := make([]PostWithAuthor, 0)
 		for _, post := range posts {
-			if viewer.canView(post.Post) && matchesFeed(viewer, following, post.Post, input.Feed) {
+			if viewer.canView(post.Post) && matchesFeed(viewer, nil, post.Post, input.Feed) {
 				candidates = append(candidates, post)
 			}
 		}
