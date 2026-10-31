@@ -35,6 +35,7 @@ func deleteAccountHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		invalidateCachedSessionsForUser(userID)
+		invalidateViewerContext(userID)
 		return c.NoContent(http.StatusNoContent)
 	}
 }
