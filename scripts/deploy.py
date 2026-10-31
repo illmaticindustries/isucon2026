@@ -2,6 +2,7 @@
 """Deploy an origin-pushed revision through Make; never build the working tree."""
 import argparse
 import datetime
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -9,9 +10,19 @@ import shlex
 import subprocess as sp
 import tarfile
 import tempfile
+import urllib.request
 from operation_lock import mutation
 
 ROOT = Path(__file__).resolve().parents[1]
+ALP_URL = 'https://github.com/tkuchiki/alp/releases/download/v1.0.22/alp_linux_amd64.tar.gz'
+ALP_SHA256 = 'e5830a70ca064aa89b6ed4715a71591e83e0fe9c85284bbec4208b7d949cbc42'
+# Path parameters of webapp/go/server.go routes, most specific first.
+ALP_MATCH = ','.join([
+    '^/api/admin/users/[^/]+/certification$', '^/api/posts/[^/]+/comments$', '^/api/posts/[^/]+/realmojis$',
+    '^/api/friend-requests/[^/]+/[^/]+$',
+    *['^/api/' + r + '/[^/]+$' for r in ['posts', 'users', 'blocks', 'follows', 'friendships', 'comments', 'realmojis', 'images', 'memories', 'feeds']],
+    '^/assets/.+$',
+])
 HOSTS = {'asia1': '54.248.250.51', 'europe1': '54.248.84.101', 'america1': '52.196.60.188', 'asia2': '52.197.163.28'}
 
 def run(args, **kwargs):
@@ -22,7 +33,7 @@ def output(args):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('action', choices=['build', 'deploy', 'preflight', 'rollback', 'status', 'logs', 'deploy-indexes', 'verify-indexes', 'nginx-log', 'alp', 'enable-pgstats'])
+    p.add_argument('action', choices=['build', 'deploy', 'preflight', 'rollback', 'status', 'logs', 'deploy-indexes', 'verify-indexes', 'nginx-log', 'alp', 'enable-pgstats', 'alp-install', 'nginx-deploy'])
     p.add_argument('--ref', default='HEAD')
     p.add_argument('--hosts', default='asia1 europe1 america1')
     a = p.parse_args()
@@ -33,7 +44,7 @@ def main():
         end = datetime.datetime(2026, 10, 31, 18, tzinfo=datetime.timezone(datetime.timedelta(hours=9)))
         if datetime.datetime.now(datetime.timezone.utc) >= end:
             p.error('competition ended; wait for organizer permission and update this guard explicitly')
-    if a.action in ('deploy', 'rollback', 'preflight') and 'asia2' in names:
+    if a.action in ('deploy', 'rollback', 'preflight', 'nginx-deploy') and 'asia2' in names:
         p.error('application actions cannot target the DB server asia2')
     if a.action in ('deploy-indexes', 'verify-indexes', 'enable-pgstats') and names != ['asia2']:
         p.error('DB operations require HOSTS=asia2')
@@ -51,11 +62,20 @@ def main():
                 elif a.action == 'nginx-log':
                     remote(n, 'sudo -n tail -n 200 /var/log/nginx/access.log')
                 elif a.action == 'alp':
-                    remote(n, 'sudo -n alp ltsv --file=/var/log/nginx/access.log --nosave-pos --sort sum --reverse -o count,method,uri,min,max,sum,avg,p99')
+                    remote(n, 'sudo -n alp ltsv --file=/var/log/nginx/access.log --sort sum --reverse -o count,method,uri,min,max,sum,avg,p99 -m ' + shlex.quote(ALP_MATCH))
                 elif a.action == 'logs':
                     remote(n, 'journalctl -u ' + ('postgresql' if n == 'asia2' else 'isureal-go') + ' -n 100 --no-pager')
                 else:
                     remote(n, '(cat /home/isucon/webapp/.deploy-revision 2>/dev/null || true); systemctl --no-pager status ' + ('postgresql' if n == 'asia2' else 'isureal-go nginx'))
+            return
+        if a.action == 'alp-install':
+            with urllib.request.urlopen(ALP_URL, timeout=30) as r:
+                tgz = r.read()
+            if hashlib.sha256(tgz).hexdigest() != ALP_SHA256:
+                raise RuntimeError('alp checksum mismatch')
+            for n in names:
+                print('=== ' + n, flush=True)
+                remote(n, 'd=$(mktemp -d); trap "rm -rf -- $d" EXIT; tar -xzf - -C "$d" alp && sudo -n install -m 755 "$d/alp" /usr/local/bin/alp && alp --version', input=tgz)
             return
         run(['git', 'fetch', 'origin'], cwd=ROOT)
         rev = output(['git', '-C', str(ROOT), 'rev-parse', '--verify', a.ref + '^{commit}'])
@@ -67,7 +87,8 @@ def main():
             work = Path(temp)
             archive = work/'source.tar'
             with archive.open('wb') as f:
-                run(['git', '-C', str(ROOT), 'archive', rev, 'webapp/go', 'webapp/sql', 'scripts/deploy-remote.sh', 'scripts/enable-pgstats.sh'], stdout=f)
+                paths = ['etc/nginx'] if a.action == 'nginx-deploy' else ['webapp/go', 'webapp/sql', 'scripts/enable-pgstats.sh']
+                run(['git', '-C', str(ROOT), 'archive', rev, *paths, 'scripts/deploy-remote.sh'], stdout=f)
             run(['tar', '-xf', str(archive), '-C', str(work)])
             if a.action == 'enable-pgstats':
                 remote('asia2', 'bash -s', input=(work/'scripts/enable-pgstats.sh').read_bytes())
@@ -78,6 +99,21 @@ def main():
                 command = '. /home/isucon/env.sh; export PGPASSWORD="$ISUREAL_DB_PASSWORD"; exec psql -X --no-password -v ON_ERROR_STOP=1 -h "$ISUREAL_DB_HOST" -p "$ISUREAL_DB_PORT" -U "$ISUREAL_DB_USER" -d "$ISUREAL_DB_NAME"'
                 for f in files:
                     remote('asia2', 'bash -eu -c ' + shlex.quote(command), input=(work/'webapp/sql'/f).read_bytes())
+                return
+            if a.action == 'nginx-deploy':
+                payload = work/'nginx.tar'
+                with tarfile.open(payload, 'w') as tar:
+                    tar.add(work/'etc/nginx', arcname='nginx')
+                for n in names:
+                    stage = output(ssh + ['isucon@'+HOSTS[n], 'mktemp -d /home/isucon/.deploy-stage.XXXXXXXX'])
+                    if not re.fullmatch(r'/home/isucon/\.deploy-stage\.[A-Za-z0-9]+', stage):
+                        raise RuntimeError('unexpected stage path')
+                    try:
+                        remote(n, 'cat > ' + stage + '/nginx.tar', input=payload.read_bytes())
+                        remote(n, 'bash -s -- nginx ' + stage, input=(work/'scripts/deploy-remote.sh').read_bytes())
+                    finally:
+                        remote(n, 'rm -rf -- ' + shlex.quote(stage))
+                    print(n + ': nginx config ' + rev, flush=True)
                 return
             env = dict(os.environ, GOOS='linux', GOARCH='amd64', CGO_ENABLED='0')
             run(['go', 'test', './...'], cwd=work/'webapp/go')
@@ -102,7 +138,7 @@ def main():
                     remote(n, 'rm -rf -- ' + shlex.quote(stage))
                 print(n + ': deployed ' + rev, flush=True)
 
-    if a.action in ('deploy', 'rollback', 'deploy-indexes', 'enable-pgstats'):
+    if a.action in ('deploy', 'rollback', 'deploy-indexes', 'enable-pgstats', 'nginx-deploy', 'alp-install'):
         with mutation(f'{a.action} ref={a.ref} hosts={a.hosts}'):
             perform()
     else:

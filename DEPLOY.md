@@ -24,6 +24,12 @@ Python 3、Git、Go（go.mod指定版）、OpenSSH、tarが必要。SSH鍵と確
 
 `make deploy-indexes REF=<SHA> HOSTS=asia2 PORTAL_IDLE=yes` で共有PostgreSQLにインデックスを適用し、有効性を検証する。アプリ反映とは独立。`make verify-indexes REF=<SHA> HOSTS=asia2` は検証のみ。sql配下の旧Make入口もルートへ委譲する。
 
+## nginx・alp
+
+nginxの設定はリポジトリの `etc/nginx/` が正。`make nginx-deploy REF=<SHA> PORTAL_IDLE=yes` で3台に反映する（共有予約の対象）。各ホストで既存設定をバックアップし、`nginx -t` に失敗したら元に戻してreloadしない。成功時はreloadのみで再起動しない。バックアップは /home/isucon/.isureal-deploy/nginx-backup.*。アクセスログはalp用のLTSV形式で、リモートアドレス・UA・リファラは出力しない。
+
+`make alp-install PORTAL_IDLE=yes` はalp v1.0.22をチェックサム照合のうえ /usr/local/bin/alp に配置する。`make alp` で集計する（クエリ文字列は除外され、パスパラメータは正規化される）。
+
 ## CI
 
 PR/mainでGo検証。main上の手動Deployワークフローも同じ `make preflight` と `make deploy` を使用し、自動pushデプロイはしない。GitHubの非公開リポジトリに `DEPLOY_SSH_KEY` と `DEPLOY_KNOWN_HOSTS` のSecretsが必要（値をGitやログに含めない）。手元とCIをまたぐ同時実行も避ける。各ホストのロックはあるが、全3台を一括トランザクションにはしない。
@@ -40,7 +46,7 @@ PR/mainでGo検証。main上の手動Deployワークフローも同じ `make pre
 4. ジョブがFINISHEDまたはFAILになり、他の未終了ジョブもないことを確認する。
 5. `make bench-release PORTAL_IDLE=yes OPERATION_TOKEN=<発行されたトークン>` で解除する。Enqueueを取りやめた場合も、未終了ジョブがないことを確認して解除する。
 
-`deploy`、`rollback`、`deploy-indexes`、`enable-pgstats` は同じ共有予約を自動取得する。3台全体の作業中は保持し、成功時に解除する。ベンチ予約中・他の変更中は即時エラーとなる。`make enable-pgstats REF=<SHA> PORTAL_IDLE=yes` はDBの再起動を伴うため、この保護の対象。通常の状態・ログ確認とpprof採取は予約を取得しない。
+`deploy`、`rollback`、`deploy-indexes`、`enable-pgstats`、`nginx-deploy`、`alp-install` は同じ共有予約を自動取得する。3台全体の作業中は保持し、成功時に解除する。ベンチ予約中・他の変更中は即時エラーとなる。`make enable-pgstats REF=<SHA> PORTAL_IDLE=yes` はDBの再起動を伴うため、この保護の対象。通常の状態・ログ確認とpprof採取は予約を取得しない。
 
 共有状態は登録済みasia2の `/home/isucon/.isureal-operations/state.json` に保存する。`make operation-status` で用途・所有者・開始時刻・トークンを確認できる。アクセスには既存SSH設定を使い、追加ポートや外部サービスは不要。全PC・CIから同一の状態を使う。予約の競合判定はサーバ側flockで直列化し、同時要求でも1件だけを許可する。
 
