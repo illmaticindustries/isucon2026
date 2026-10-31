@@ -29,13 +29,15 @@ type RealMojiWithReactor struct {
 	Reactor User `db:"reactor"`
 }
 
-func selectCurrentRealMojis(ctx context.Context, db sqlx.QueryerContext, conditions string, args ...any) ([]RealMojiWithReactor, error) {
-	var reactions []RealMojiWithReactor
-	if err := sqlx.SelectContext(ctx, db, &reactions, `
+var currentRealMojiSelect = `
   SELECT r.id, r.post_id, r.reactor_id, r.image_id, r.reaction_type, r.created_at, r.replaced_at, r.deleted_at,
-         `+userColumnsAs("u", "reactor")+`
+         ` + userColumnsAs("u", "reactor") + `
   FROM realmojis r JOIN users u ON u.id = r.reactor_id AND u.status = 'active'
-  WHERE r.replaced_at IS NULL AND r.deleted_at IS NULL `+conditions, args...); err != nil {
+  WHERE r.replaced_at IS NULL AND r.deleted_at IS NULL `
+
+func selectCurrentRealMojis(ctx context.Context, db sqlx.QueryerContext, query string, args ...any) ([]RealMojiWithReactor, error) {
+	var reactions []RealMojiWithReactor
+	if err := sqlx.SelectContext(ctx, db, &reactions, query, args...); err != nil {
 		return nil, err
 	}
 	for i := range reactions {

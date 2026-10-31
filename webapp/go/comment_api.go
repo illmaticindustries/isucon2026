@@ -110,17 +110,17 @@ func getCommentsHandler(h *HandlerContext) echo.HandlerFunc {
 		if !allowed {
 			return NewAPIError(http.StatusForbidden, "interaction_forbidden")
 		}
-		comments, err := selectCommentsWithAuthor(ctx, h.DB, `AND c.post_id=$1 AND ($2::timestamptz IS NULL OR (c.created_at,c.id)>($2,$3)) ORDER BY c.created_at,c.id LIMIT 51`, input.PostID, input.AfterCreatedAt, input.AfterID)
+		comments, err := selectCommentsWithAuthor(ctx, h.DB, currentCommentSelect+`AND c.post_id=$1 AND ($2::timestamptz IS NULL OR (c.created_at,c.id)>($2,$3)) ORDER BY c.created_at,c.id LIMIT 51`, input.PostID, input.AfterCreatedAt, input.AfterID)
 		if err != nil {
 			return err
+		}
+		hasMore := len(comments) > 50
+		if hasMore {
+			comments = comments[:50]
 		}
 		items := make([]createCommentResponse, 0, len(comments))
 		for _, comment := range comments {
 			items = append(items, newCommentResponse(comment.Comment, comment.Author))
-		}
-		hasMore := len(items) > 50
-		if hasMore {
-			items = items[:50]
 		}
 		return c.JSON(http.StatusOK, getCommentsResponse{Items: items, HasMore: hasMore})
 	}

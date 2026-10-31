@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -209,21 +208,7 @@ func (viewer viewerContext) canView(post Post) bool {
 }
 
 func canViewPost(ctx context.Context, db sqlx.QueryerContext, viewerID, postID string) (bool, error) {
-	post, err := getPostWithAuthor(ctx, db, postID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	viewer, err := loadViewerContext(ctx, db, viewerID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return viewer.canView(post.Post), nil
+	return postAccessAllowed(ctx, db, viewerID, postID, false)
 }
 
 func getFriendIDs(ctx context.Context, db sqlx.QueryerContext, userID string) ([]string, error) {

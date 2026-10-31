@@ -150,6 +150,7 @@ func TestFeedPostgresMatchesOriginal(t *testing.T) {
 	})
 	check := func(t *testing.T) {
 		t.Helper()
+		checkPointPostAccess(t, db)
 		for _, id := range []string{"viewer", "u000", "u001", "u002", "u023", "missing"} {
 			want, wantErr := referenceViewerContext(context.Background(), db, id)
 			got, gotErr := loadViewerContext(context.Background(), db, id)
