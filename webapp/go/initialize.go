@@ -17,6 +17,8 @@ type initializeResponse struct {
 
 func initializeHandler(*HandlerContext) echo.HandlerFunc {
 	return func(c *echo.Context) error {
+		imageBodies.clear()
+		defer imageBodies.clear()
 		cmd := exec.Command("../sql/init.sh")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
