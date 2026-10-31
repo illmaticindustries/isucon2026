@@ -8,7 +8,8 @@ WHERE c.relnamespace = 'public'::regnamespace
   AND c.relname IN (
     'realmojis_active_image_reactor', 'posts_active_image_author',
     'friendships_high_low', 'block_relations_blocked_blocker',
-    'users_username', 'login_sessions_active_token', 'login_sessions_active_user'
+    'users_username', 'login_sessions_active_token', 'login_sessions_active_user',
+    'friend_requests_pending_pair'
   )
 ORDER BY c.relname;
 
@@ -19,7 +20,8 @@ BEGIN
     SELECT 1 FROM (VALUES
       ('realmojis_active_image_reactor'), ('posts_active_image_author'),
       ('friendships_high_low'), ('block_relations_blocked_blocker'),
-      ('users_username'), ('login_sessions_active_token'), ('login_sessions_active_user')
+      ('users_username'), ('login_sessions_active_token'), ('login_sessions_active_user'),
+      ('friend_requests_pending_pair')
     ) expected(name)
     LEFT JOIN pg_class c ON c.relname = expected.name
       AND c.relnamespace = 'public'::regnamespace

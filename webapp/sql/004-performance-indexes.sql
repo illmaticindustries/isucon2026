@@ -30,3 +30,8 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS login_sessions_active_token
 CREATE INDEX CONCURRENTLY IF NOT EXISTS login_sessions_active_user
   ON login_sessions (user_id)
   WHERE active = true;
+
+-- Both directions of the pending pair lookup can use this same composite index.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS friend_requests_pending_pair
+  ON friend_requests (requester_id, recipient_id) INCLUDE (id)
+  WHERE status = 'pending';
