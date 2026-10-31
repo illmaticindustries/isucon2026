@@ -30,7 +30,7 @@ restore() {
 case "${1:-}" in
 photo-prepare)
     rev=$2 expected=$3 site_hash=$4
-    [[ "$rev" =~ ^[0-9a-f]{40}$ && "$expected" =~ ^[0-9a-f]{40}$ ]]
+    [[ "$rev" =~ ^[0-9a-f]{40}$ && "$expected" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid revision" >&2; exit 1; }
     test "$(cat "$base/.deploy-revision")" = "$expected"
     echo "$site_hash  $nginx/sites-available/isureal.conf" | sha256sum --check --status
     saved="$state/photo-$rev"
@@ -49,9 +49,9 @@ photo-prepare)
     ;;
 photo-rollback)
     rev=$2 expected=$3
-    [[ "$rev" =~ ^[0-9a-f]{40}$ && "$expected" =~ ^[0-9a-f]{40}$ ]]
+    [[ "$rev" =~ ^[0-9a-f]{40}$ && "$expected" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid revision" >&2; exit 1; }
     current=$(cat "$base/.deploy-revision")
-    [[ "$current" = "$rev" || "$current" = "$expected" ]]
+    [[ "$current" = "$rev" || "$current" = "$expected" ]] || { echo "Deployed revision changed" >&2; exit 1; }
     saved="$state/photo-$rev"
     if test ! -d "$saved" && test "$current" = "$expected"; then exit 0; fi
     test "$(cat "$saved/revision")" = "$expected"
