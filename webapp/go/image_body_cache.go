@@ -88,4 +88,5 @@ func (c *imageBodyCache) put(generation int64, key imageBodyKey, body cachedImag
 	body.Data = append([]byte(nil), body.Data...)
 	c.entries[key] = c.lru.PushFront(imageBodyEntry{key, body})
 	c.bytes += len(body.Data)
+	hintWarmImage(key.ID)
 }

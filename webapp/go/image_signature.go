@@ -112,9 +112,11 @@ func imageSignatureExpiry(now time.Time) int64 {
 
 func signedImageURL(user User, imageID string) string {
 	exp := imageSignatureExpiry(time.Now())
+	signature := imageSignature(user.ImageKey, imageID, exp)
+	rememberImageURL(imageID, exp, signature)
 	query := url.Values{
 		"exp": {strconv.FormatInt(exp, 10)},
-		"sig": {base64.RawURLEncoding.EncodeToString(imageSignature(user.ImageKey, imageID, exp))},
+		"sig": {base64.RawURLEncoding.EncodeToString(signature)},
 	}
 	return "/api/images/" + url.PathEscape(imageID) + "?" + query.Encode()
 }

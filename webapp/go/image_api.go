@@ -21,18 +21,23 @@ type getImageRequest struct {
 	Sig     string `query:"sig" json:"-"`
 }
 
-const signedImageMetadata = `
+const imageMetadataFields = `
    SELECT u.secret_key_hash, g.generation, i.created_at, i.media_type,
      (COALESCE(u.profile_image_id = i.id, false)
       OR EXISTS (SELECT 1 FROM posts p WHERE p.image_id = i.id AND p.author_id = u.id AND p.deleted_at IS NULL)
       OR EXISTS (SELECT 1 FROM realmojis r
         JOIN posts p ON p.id = r.post_id AND p.deleted_at IS NULL
         JOIN users author ON author.id = p.author_id AND author.status = 'active'
-        WHERE r.image_id = i.id AND r.reactor_id = u.id AND r.replaced_at IS NULL AND r.deleted_at IS NULL)) AS valid
+        WHERE r.image_id = i.id AND r.reactor_id = u.id AND r.replaced_at IS NULL AND r.deleted_at IS NULL)) AS valid`
+const imageMetadataFrom = `
    FROM image_objects i JOIN users u ON u.id = i.owner_user_id
    CROSS JOIN image_cache_generation g
    WHERE i.id = $1 AND u.status = 'active'
   `
+
+const signedImageMetadata = imageMetadataFields + imageMetadataFrom
+const signedImageWithBody = `SELECT m.secret_key_hash, m.generation, m.created_at, m.media_type, m.valid,
+ CASE WHEN m.valid THEN m.data END AS data FROM (` + imageMetadataFields + `, i.data` + imageMetadataFrom + `) m`
 
 func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 	return func(c *echo.Context) error {
@@ -56,6 +61,7 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 
 		ctx := c.Request().Context()
 		var metadata struct {
+			Data          []byte    `db:"data"`
 			SecretKeyHash string    `db:"secret_key_hash"`
 			Generation    int64     `db:"generation"`
 			CreatedAt     time.Time `db:"created_at"`
@@ -63,7 +69,12 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 			MediaType string `db:"media_type"`
 			Valid     bool   `db:"valid"`
 		}
-		err = h.DB.GetContext(ctx, &metadata, signedImageMetadata, input.ImageID)
+		eager := prefetchImageBody(input.ImageID, exp, sig)
+		lookup := signedImageMetadata
+		if eager {
+			lookup = signedImageWithBody
+		}
+		err = h.DB.GetContext(ctx, &metadata, lookup, input.ImageID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewAPIError(http.StatusForbidden, "image_forbidden")
 		}
@@ -97,6 +108,7 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 			return c.NoContent(http.StatusOK)
 		}
 		if h.ImageFiles.exists(fileKey) {
+			hintWarmImage(input.ImageID)
 			return serveFile()
 		}
 		if body, ok := imageBodies.get(metadata.Generation, cacheKey); ok {
@@ -113,10 +125,13 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 			Data      []byte `db:"data"`
 			MediaType string `db:"media_type"`
 		}
-		err = h.DB.GetContext(ctx, &object, `
+		if eager {
+			object.Data, object.MediaType = metadata.Data, metadata.MediaType
+		} else {
+			err = h.DB.GetContext(ctx, &object, `
    SELECT i.data, i.media_type
    FROM image_objects i JOIN users u ON u.id = i.owner_user_id AND u.status = 'active'
-   WHERE i.id = $1 AND i.created_at = $2
+   WHERE i.id = $1 AND i.created_at = $2 AND u.secret_key_hash=$4
      AND (SELECT generation FROM image_cache_generation) = $3 AND (
      u.profile_image_id = i.id
      OR EXISTS (
@@ -130,12 +145,13 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
        WHERE r.image_id = i.id AND r.reactor_id = u.id AND r.replaced_at IS NULL AND r.deleted_at IS NULL
      )
    )
-  `, input.ImageID, metadata.CreatedAt, metadata.Generation)
-		if errors.Is(err, sql.ErrNoRows) {
-			return NewAPIError(http.StatusForbidden, "image_forbidden")
-		}
-		if err != nil {
-			return err
+  `, input.ImageID, metadata.CreatedAt, metadata.Generation, metadata.SecretKeyHash)
+			if errors.Is(err, sql.ErrNoRows) {
+				return NewAPIError(http.StatusForbidden, "image_forbidden")
+			}
+			if err != nil {
+				return err
+			}
 		}
 		regional := bytes.HasPrefix(object.Data, []byte(photoMagic))
 		if regional {

@@ -159,7 +159,7 @@ func insertJPEG(ctx context.Context, tx *sqlx.Tx, id, owner string, data []byte,
 	return img, err
 }
 func (s *imageFileStore) warmJPEG(img insertedImage, id string, data []byte) {
-	if s != nil {
-		s.put(fileImageKey(id, img.CreatedAt, "image/jpeg", img.Generation), img.Generation, data)
+	if s != nil && s.put(fileImageKey(id, img.CreatedAt, "image/jpeg", img.Generation), img.Generation, data) {
+		hintWarmImage(id)
 	}
 }
