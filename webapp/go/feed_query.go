@@ -12,6 +12,7 @@ import (
 // friends_of_friends post; ordinary friends/public pages do not expand a graph.
 func selectChronologicalFeed(ctx context.Context, db sqlx.QueryerContext, viewerID string, input getFeedRequest) ([]PostWithAuthor, error) {
 	predicate := ""
+	openWindow := `p.posting_window_id = ANY(ARRAY(SELECT id FROM posting_windows WHERE ended_at IS NULL))`
 	switch input.Feed {
 	case "friends":
 		// Compute the friend IDs once so PostgreSQL can probe the live posts
@@ -19,6 +20,8 @@ func selectChronologicalFeed(ctx context.Context, db sqlx.QueryerContext, viewer
 		predicate = `p.author_id = ANY(ARRAY(SELECT id FROM viewer_friends))
     AND p.visibility IN ('public', 'friends', 'friends_of_friends')`
 	case "public":
+		// Public has no author restriction. Let the planner join the open windows directly.
+		openWindow = `EXISTS (SELECT 1 FROM posting_windows w WHERE w.id=p.posting_window_id AND w.ended_at IS NULL)`
 		predicate = `p.visibility = 'public'`
 	case "following":
 		predicate = `EXISTS (SELECT 1 FROM follows f WHERE f.follower_id=$1 AND f.followee_id=p.author_id)
@@ -51,7 +54,7 @@ func selectChronologicalFeed(ctx context.Context, db sqlx.QueryerContext, viewer
    JOIN users author ON author.id=p.author_id AND author.status='active'
    CROSS JOIN viewer v
    WHERE v.has_posted AND p.author_id<>$1 AND p.deleted_at IS NULL
-     AND p.posting_window_id = ANY(ARRAY(SELECT id FROM posting_windows WHERE ended_at IS NULL))
+     AND `+openWindow+`
      AND ($2::timestamptz IS NULL OR (p.posted_at,p.id)<($2,$3))
      AND NOT EXISTS (
        SELECT 1 FROM block_relations b
