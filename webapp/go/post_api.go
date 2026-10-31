@@ -371,7 +371,6 @@ func deletePostHandler(h *HandlerContext) echo.HandlerFunc {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
-		invalidateImageMeta()
 		return c.NoContent(http.StatusNoContent)
 	}
 }

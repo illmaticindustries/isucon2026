@@ -112,7 +112,6 @@ func replaceRealMojiHandler(h *HandlerContext) echo.HandlerFunc {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
-		invalidateImageMeta()
 		h.ImageFiles.warmJPEG(written, imageID, data)
 		return c.JSON(http.StatusCreated, newRealMojiResponse(reaction, user))
 	}
@@ -247,7 +246,6 @@ func deleteRealMojiHandler(h *HandlerContext) echo.HandlerFunc {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
-		invalidateImageMeta()
 		return c.NoContent(http.StatusNoContent)
 	}
 }
