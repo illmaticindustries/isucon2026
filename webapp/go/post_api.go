@@ -105,9 +105,6 @@ func createPostHandler(h *HandlerContext) echo.HandlerFunc {
 			StartsAt  time.Time `db:"starts_at"`
 		}
 		err = tx.GetContext(ctx, &window, `SELECT id, local_date, starts_at FROM posting_windows WHERE region = $1 AND ended_at IS NULL FOR UPDATE`, user.Region)
-		if errors.Is(err, sql.ErrNoRows) {
-			err = tx.GetContext(ctx, &window, `SELECT id, local_date, starts_at FROM posting_windows WHERE region = $1 AND ended_at IS NULL FOR UPDATE`, user.Region)
-		}
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return NewAPIError(http.StatusConflict, "post_slot_unavailable")
