@@ -45,6 +45,8 @@ func NewServerWithDB(config *Config, db *sqlx.DB) *echo.Echo {
 	e.IPExtractor = extractClientIP
 
 	e.Use(ActionLogMiddleware(config.LogLevel, os.Stdout))
+	// Must run before ActionLogMiddleware writes the error response.
+	e.Use(DrainRequestBodyMiddleware)
 	e.Use(middleware.Recover())
 	e.HTTPErrorHandler = APIErrorHandler
 
