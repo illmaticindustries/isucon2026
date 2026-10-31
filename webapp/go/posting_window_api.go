@@ -36,7 +36,7 @@ func getCurrentPostingWindowHandler(h *HandlerContext) echo.HandlerFunc {
           count(p.id) FILTER (WHERE p.deleted_at IS NULL) AS active,
           count(p.id) FILTER (WHERE p.deleted_at IS NOT NULL) AS deleted
    FROM users u JOIN posting_windows w ON w.region = u.region AND w.ended_at IS NULL
-   LEFT JOIN posting_windows posted_window ON posted_window.local_date = w.local_date
+   LEFT JOIN posting_windows posted_window ON posted_window.local_date = w.local_date AND posted_window.region = w.region
    LEFT JOIN posts p ON p.author_id = u.id AND p.posting_window_id = posted_window.id
    WHERE u.id = $1
    GROUP BY w.id
