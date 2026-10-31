@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v5"
 )
 
@@ -103,16 +104,59 @@ func getCommentsHandler(h *HandlerContext) echo.HandlerFunc {
 			return NewAPIError(http.StatusBadRequest, "invalid_pagination")
 		}
 		ctx := c.Request().Context()
-		allowed, err := canComment(ctx, h.DB, GetSession(c).UserID, input.PostID)
-		if err != nil {
+		viewer := GetSession(c).UserID
+		// The comment permission and the page are independent of each other, so
+		// an inter-region database link must not pay two round trips for them.
+		// The permission is evaluated once in a CTE and the page is joined to it:
+		// when it is false the join yields a single row that only carries the
+		// denial, so no separate SELECT EXISTS is needed.
+		var rows []struct {
+			Allowed bool `db:"allowed"`
+			Comment
+			Author User `db:"author"`
+		}
+		if err := sqlx.SelectContext(ctx, h.DB, &rows, `
+  WITH perm AS (
+    SELECT EXISTS(SELECT 1`+permittedPostFrom+`) AS allowed
+  )
+  SELECT perm.allowed,
+    COALESCE(c.id, '') AS id,
+    COALESCE(c.post_id, '') AS post_id,
+    COALESCE(c.author_id, '') AS author_id,
+    COALESCE(c.body, '') AS body,
+    COALESCE(c.created_at, 'epoch'::timestamptz) AS created_at,
+    c.deleted_at,
+    COALESCE(u.id, '') AS "author.id",
+    COALESCE(u.username, '') AS "author.username",
+    COALESCE(u.secret_key_hash, '') AS "author.secret_key_hash",
+    COALESCE(u.display_name, '') AS "author.display_name",
+    COALESCE(u.bio, '') AS "author.bio",
+    u.profile_image_id AS "author.profile_image_id",
+    COALESCE(u.region, '') AS "author.region",
+    COALESCE(u.account_type, '') AS "author.account_type",
+    COALESCE(u.status, '') AS "author.status"
+  FROM perm
+  LEFT JOIN comments c ON perm.allowed AND c.deleted_at IS NULL AND c.post_id=$1
+    AND ($4::timestamptz IS NULL OR (c.created_at, c.id) > ($4, $5))
+  LEFT JOIN users u ON u.id = c.author_id AND u.status = 'active'
+  WHERE c.id IS NULL OR u.id IS NOT NULL
+  ORDER BY c.created_at, c.id
+  LIMIT 51
+  `, input.PostID, viewer, true, input.AfterCreatedAt, input.AfterID); err != nil {
 			return err
 		}
-		if !allowed {
+		if len(rows) == 0 || !rows[0].Allowed {
 			return NewAPIError(http.StatusForbidden, "interaction_forbidden")
 		}
-		comments, err := selectCommentsWithAuthor(ctx, h.DB, currentCommentSelect+`AND c.post_id=$1 AND ($2::timestamptz IS NULL OR (c.created_at,c.id)>($2,$3)) ORDER BY c.created_at,c.id LIMIT 51`, input.PostID, input.AfterCreatedAt, input.AfterID)
-		if err != nil {
-			return err
+		comments := make([]CommentWithAuthor, 0, len(rows))
+		for _, row := range rows {
+			if row.Comment.ID == "" {
+				continue
+			}
+			if err := row.Author.setImageKey(); err != nil {
+				return err
+			}
+			comments = append(comments, CommentWithAuthor{Comment: row.Comment, Author: row.Author})
 		}
 		hasMore := len(comments) > 50
 		if hasMore {

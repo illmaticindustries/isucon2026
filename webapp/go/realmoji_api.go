@@ -12,6 +12,7 @@ import (
 	"example.com/isureal-company/isureal/internal/jpegvalidate"
 
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v5"
 )
 
@@ -137,16 +138,60 @@ func getRealMojisHandler(h *HandlerContext) echo.HandlerFunc {
 			return NewAPIError(http.StatusBadRequest, "invalid_pagination")
 		}
 		ctx := c.Request().Context()
-		allowed, err := canViewPost(ctx, h.DB, GetSession(c).UserID, input.PostID)
-		if err != nil {
+		viewer := GetSession(c).UserID
+		// View permission and the page are independent, so an inter-region
+		// database link must not pay two round trips. The permission is evaluated
+		// once in a CTE and the page joined to it; when it is false the join
+		// yields one denial-only row instead of a separate SELECT EXISTS.
+		var rows []struct {
+			Allowed bool `db:"allowed"`
+			RealMoji
+			Reactor User `db:"reactor"`
+		}
+		if err := sqlx.SelectContext(ctx, h.DB, &rows, `
+  WITH perm AS (
+    SELECT EXISTS(SELECT 1`+permittedPostFrom+`) AS allowed
+  )
+  SELECT perm.allowed,
+    COALESCE(r.id, '') AS id,
+    COALESCE(r.post_id, '') AS post_id,
+    COALESCE(r.reactor_id, '') AS reactor_id,
+    COALESCE(r.image_id, '') AS image_id,
+    COALESCE(r.reaction_type, '') AS reaction_type,
+    COALESCE(r.created_at, 'epoch'::timestamptz) AS created_at,
+    r.replaced_at,
+    r.deleted_at,
+    COALESCE(u.id, '') AS "reactor.id",
+    COALESCE(u.username, '') AS "reactor.username",
+    COALESCE(u.secret_key_hash, '') AS "reactor.secret_key_hash",
+    COALESCE(u.display_name, '') AS "reactor.display_name",
+    COALESCE(u.bio, '') AS "reactor.bio",
+    u.profile_image_id AS "reactor.profile_image_id",
+    COALESCE(u.region, '') AS "reactor.region",
+    COALESCE(u.account_type, '') AS "reactor.account_type",
+    COALESCE(u.status, '') AS "reactor.status"
+  FROM perm
+  LEFT JOIN realmojis r ON perm.allowed AND r.replaced_at IS NULL AND r.deleted_at IS NULL AND r.post_id=$1
+    AND ($4::timestamptz IS NULL OR (r.created_at, r.id) < ($4, $5))
+  LEFT JOIN users u ON u.id = r.reactor_id AND u.status = 'active'
+  WHERE r.id IS NULL OR u.id IS NOT NULL
+  ORDER BY r.created_at DESC, r.id DESC
+  LIMIT 51
+  `, input.PostID, viewer, false, input.BeforeCreatedAt, input.BeforeID); err != nil {
 			return err
 		}
-		if !allowed {
+		if len(rows) == 0 || !rows[0].Allowed {
 			return NewAPIError(http.StatusForbidden, "interaction_forbidden")
 		}
-		reactions, err := selectCurrentRealMojis(ctx, h.DB, currentRealMojiSelect+`AND r.post_id=$1 AND ($2::timestamptz IS NULL OR (r.created_at,r.id)<($2,$3)) ORDER BY r.created_at DESC,r.id DESC LIMIT 51`, input.PostID, input.BeforeCreatedAt, input.BeforeID)
-		if err != nil {
-			return err
+		reactions := make([]RealMojiWithReactor, 0, len(rows))
+		for _, row := range rows {
+			if row.RealMoji.ID == "" {
+				continue
+			}
+			if err := row.Reactor.setImageKey(); err != nil {
+				return err
+			}
+			reactions = append(reactions, RealMojiWithReactor{RealMoji: row.RealMoji, Reactor: row.Reactor})
 		}
 		hasMore := len(reactions) > 50
 		if hasMore {
