@@ -57,7 +57,7 @@ func searchUsersHandler(h *HandlerContext) echo.HandlerFunc {
 		}
 		ctx := c.Request().Context()
 		viewer := GetSession(c).UserID
-		blocked, err := getBlockedUserIDs(ctx, h.DB, viewer)
+		blocked, err := getBlockedUserIDs(ctx, h.ReadDB(), viewer)
 		if err != nil {
 			return err
 		}
@@ -69,7 +69,7 @@ func searchUsersHandler(h *HandlerContext) echo.HandlerFunc {
 		}
 		// Match on narrow rows and stop at 51 matches; decoding every column of every
 		// active user dominated asia1 CPU. Both queries share one snapshot.
-		tx, err := h.DB.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+		tx, err := h.ReadDB().BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 		if err != nil {
 			return err
 		}
@@ -163,7 +163,7 @@ func getUserHandler(h *HandlerContext) echo.HandlerFunc {
 			IsBlocked bool `db:"is_blocked"`
 			IsFriend  bool `db:"is_friend"`
 		}
-		err := sqlx.GetContext(ctx, h.DB, &row, `
+		err := sqlx.GetContext(ctx, h.ReadDB(), &row, `
   SELECT `+strings.Join(userColumns, ", ")+`,
     EXISTS(SELECT 1 FROM block_relations b
       WHERE (b.blocker_id=$2 AND b.blocked_id=u.id)

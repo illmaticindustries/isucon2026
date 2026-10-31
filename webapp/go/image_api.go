@@ -49,7 +49,7 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 			MediaType string `db:"media_type"`
 			Valid     bool   `db:"valid"`
 		}
-		err = h.DB.GetContext(ctx, &metadata, `
+		err = h.ReadDB().GetContext(ctx, &metadata, `
    SELECT u.secret_key_hash, g.generation, i.created_at, i.media_type,
      (COALESCE(u.profile_image_id = i.id, false)
       OR EXISTS (SELECT 1 FROM posts p WHERE p.image_id = i.id AND p.author_id = u.id AND p.deleted_at IS NULL)
@@ -110,7 +110,7 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 			Data      []byte `db:"data"`
 			MediaType string `db:"media_type"`
 		}
-		err = h.DB.GetContext(ctx, &object, `
+		err = h.ReadDB().GetContext(ctx, &object, `
    SELECT i.data, i.media_type
    FROM image_objects i JOIN users u ON u.id = i.owner_user_id AND u.status = 'active'
    WHERE i.id = $1 AND i.created_at = $2

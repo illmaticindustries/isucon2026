@@ -67,7 +67,7 @@ func replaceRealMojiHandler(h *HandlerContext) echo.HandlerFunc {
 
 		ctx := c.Request().Context()
 		actor := GetSession(c).UserID
-		post, err := getPost(ctx, h.DB, input.PostID)
+		post, err := getPost(ctx, h.ReadDB(), input.PostID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewAPIError(http.StatusForbidden, "interaction_forbidden")
 		}
@@ -148,7 +148,7 @@ func getRealMojisHandler(h *HandlerContext) echo.HandlerFunc {
 			RealMoji
 			Reactor User `db:"reactor"`
 		}
-		if err := sqlx.SelectContext(ctx, h.DB, &rows, `
+		if err := sqlx.SelectContext(ctx, h.ReadDB(), &rows, `
   WITH perm AS (
     SELECT EXISTS(SELECT 1`+permittedPostFrom+`) AS allowed
   )

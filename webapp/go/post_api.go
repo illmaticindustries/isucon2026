@@ -191,7 +191,7 @@ func getMyCurrentPostHandler(h *HandlerContext) echo.HandlerFunc {
 		ctx := c.Request().Context()
 		userID := GetSession(c).UserID
 		var post PostWithAuthor
-		err := h.DB.GetContext(ctx, &post, `
+		err := h.ReadDB().GetContext(ctx, &post, `
    SELECT `+postColumns+`, `+userColumnsAs("u", "author")+`
    FROM posts p
    JOIN posting_windows w ON w.id = p.posting_window_id
@@ -229,7 +229,7 @@ func getPostHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		ctx := c.Request().Context()
-		post, err := getVisiblePost(ctx, h.DB, GetSession(c).UserID, input.PostID)
+		post, err := getVisiblePost(ctx, h.ReadDB(), GetSession(c).UserID, input.PostID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewAPIError(http.StatusNotFound, "post_not_found")
 		}
