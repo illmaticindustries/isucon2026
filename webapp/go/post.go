@@ -102,7 +102,7 @@ type viewerContext struct {
 }
 
 func loadViewerContext(ctx context.Context, db sqlx.QueryerContext, viewerID string) (viewerContext, error) {
-	viewer := viewerContext{Friends: map[string]bool{}, FriendsOfFriends: map[string]bool{}, MutualFriends: map[string]int{}}
+	viewer := viewerContext{Friends: map[string]bool{}, FriendsOfFriends: map[string]bool{}, MutualFriends: map[string]int{}, Blocked: map[string]bool{}}
 	// All viewer lookups are fetched in one statement. A region that reaches the
 	// shared database over an inter-region link pays a round trip per query, so
 	// collapsing the fixed set of lookups into one matters there.
