@@ -29,7 +29,11 @@ func ConfigFromEnv() *Config {
 		DBUser:     envOrDefault("ISUREAL_DB_USER", "isureal"),
 		DBPassword: envOrDefault("ISUREAL_DB_PASSWORD", "isureal"),
 		DBName:     envOrDefault("ISUREAL_DB_NAME", "isureal"),
-		LogLevel:   envOrDefault("ISUREAL_LOG_LEVEL", "debug"),
+		// Only errors are logged by default: the per-request action log is
+		// written to stdout for every request and journald's capture of it is
+		// pure overhead while scoring. Set ISUREAL_LOG_LEVEL=info to get the
+		// action lines back for diagnosis.
+		LogLevel: envOrDefault("ISUREAL_LOG_LEVEL", "error"),
 	}
 	// Every app server serves its own region and keeps a local copy of the
 	// immutable image files, so all regions enable the file cache.
