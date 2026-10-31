@@ -1,11 +1,11 @@
 HOST ?= isu2026-1
 APP := isureal
 
-# AGENTS.md により、本番サーバーへの変更操作（sudo / サービス再起動 / ログ削除 /
-# サーバー上での git 操作 / 設定ファイルの直接上書き）はこの Makefile に含めない。
-# 反映はリポジトリ → PR → CI → 承認済みデプロイパイプライン経由で行うこと。
+# 公式レギュレーション・当日マニュアルとルートの AGENTS.md を順守する。
+# 変更はリポジトリへプッシュし、プッシュ済みコミットを Makefile から反映する。
+# 現在のルートターゲットはビルド・調査用。DBインデックス反映は webapp/sql/Makefile。
 
-# ローカルでクロスビルドする（成果物の配置はデプロイパイプラインで行う）
+# ローカルでクロスビルドする（このターゲットだけではデプロイしない）
 .PHONY: go-build-local
 go-build-local:
 	cd ./webapp/go && GOOS=linux GOARCH=amd64 go build -o $(APP) ./cmd/$(APP)
