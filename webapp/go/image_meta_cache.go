@@ -8,6 +8,7 @@ import (
 
 // imageMetaEntry is the per-image metadata used by GET /api/images.
 type imageMetaEntry struct {
+	epoch         int64
 	secretKeyHash string
 	generation    int64
 	createdAt     time.Time
@@ -32,20 +33,31 @@ const imageMetaCacheLimit = 1 << 16
 var imageMetaCache sync.Map
 var imageMetaCacheSize atomic.Int64
 
+// imageMetaEpoch is bumped by any write that can change an image's validity
+// (post deletion, RealMoji replacement/deletion, profile image change, account
+// deletion). Entries recorded under an older epoch are ignored, so a change made
+// in this process is reflected on the very next request instead of after the TTL.
+var imageMetaEpoch atomic.Int64
+
+// invalidateImageMeta makes every cached entry stale without freeing memory.
+func invalidateImageMeta() {
+	imageMetaEpoch.Add(1)
+}
+
 func loadImageMeta(now time.Time, id string) (imageMetaEntry, bool) {
 	value, ok := imageMetaCache.Load(id)
 	if !ok {
 		return imageMetaEntry{}, false
 	}
 	entry := value.(imageMetaEntry)
-	if now.After(entry.expiresAt) {
-		imageMetaCache.Delete(id)
+	if entry.epoch != imageMetaEpoch.Load() || now.After(entry.expiresAt) {
 		return imageMetaEntry{}, false
 	}
 	return entry, true
 }
 
 func storeImageMeta(id string, entry imageMetaEntry) {
+	entry.epoch = imageMetaEpoch.Load()
 	entry.expiresAt = time.Now().Add(imageMetaTTL)
 	if imageMetaCacheSize.Add(1) > imageMetaCacheLimit {
 		imageMetaCache.Clear()
@@ -55,6 +67,7 @@ func storeImageMeta(id string, entry imageMetaEntry) {
 }
 
 func clearImageMeta() {
+	imageMetaEpoch.Add(1)
 	imageMetaCache.Clear()
 	imageMetaCacheSize.Store(0)
 }

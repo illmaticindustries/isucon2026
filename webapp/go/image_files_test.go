@@ -215,6 +215,8 @@ func TestRegionalImageNginx(t *testing.T) {
 	get(2, signed(exp), nil, 200) // cold fill after removal
 	get(1, signed(exp)+"x", nil, 403)
 	get(2, signed(time.Now().Unix()-1), nil, 403)
+	// This update bypasses the app, so account for the image metadata cache.
+	invalidateImageMeta()
 	db.MustExec("UPDATE users SET profile_image_id=NULL")
 	for region := range 3 {
 		get(region, signed(exp), nil, 403)
