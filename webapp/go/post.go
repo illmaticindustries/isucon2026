@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -101,34 +102,57 @@ type viewerContext struct {
 }
 
 func loadViewerContext(ctx context.Context, db sqlx.QueryerContext, viewerID string) (viewerContext, error) {
-	viewer := viewerContext{Friends: map[string]bool{}, FriendsOfFriends: map[string]bool{}, MutualFriends: map[string]int{}}
-	var err error
-	if viewer.User, err = getUser(ctx, db, viewerID); err != nil {
+	viewer := viewerContext{Friends: map[string]bool{}, FriendsOfFriends: map[string]bool{}, MutualFriends: map[string]int{}, Blocked: map[string]bool{}}
+	var base struct {
+		User
+		HasPostedToday bool `db:"has_posted_today"`
+	}
+	if err := sqlx.GetContext(ctx, db, &base, `
+  SELECT `+strings.Join(userColumns, ", ")+`,
+    EXISTS(
+      SELECT 1 FROM posts p
+      JOIN posting_windows posted ON posted.id = p.posting_window_id
+      JOIN posting_windows current ON current.region = u.region AND current.ended_at IS NULL
+                                  AND current.local_date = posted.local_date
+      WHERE p.author_id = u.id AND p.deleted_at IS NULL
+    ) AS has_posted_today
+  FROM users u WHERE u.id = $1 AND u.status = 'active'
+ `, viewerID); err != nil {
 		return viewer, err
 	}
-	if err := sqlx.GetContext(ctx, db, &viewer.HasPostedToday, `
-  SELECT EXISTS(
-    SELECT 1 FROM posts p
-    JOIN posting_windows posted ON posted.id = p.posting_window_id
-    JOIN posting_windows current ON current.region = $2 AND current.ended_at IS NULL
-                                AND current.local_date = posted.local_date
-    WHERE p.author_id = $1 AND p.deleted_at IS NULL
-  )
- `, viewer.ID, viewer.Region); err != nil {
+	viewer.User = base.User
+	if err := viewer.setImageKey(); err != nil {
 		return viewer, err
 	}
-	if viewer.Blocked, err = getBlockedUserIDs(ctx, db, viewer.ID); err != nil {
+	viewer.HasPostedToday = base.HasPostedToday
+
+	var relations []struct {
+		Kind    string `db:"kind"`
+		OtherID string `db:"other_id"`
+	}
+	if err := sqlx.SelectContext(ctx, db, &relations, `
+  SELECT 'friend' AS kind,
+         CASE WHEN user_low_id = $1 THEN user_high_id ELSE user_low_id END AS other_id
+  FROM friendships WHERE user_low_id = $1 OR user_high_id = $1
+  UNION ALL
+  SELECT 'blocked' AS kind,
+         CASE WHEN blocker_id = $1 THEN blocked_id ELSE blocker_id END AS other_id
+  FROM block_relations WHERE blocker_id = $1 OR blocked_id = $1
+ `, viewer.ID); err != nil {
 		return viewer, err
 	}
-	friends, err := getFriendIDs(ctx, db, viewer.ID)
-	if err != nil {
-		return viewer, err
+	friends := make([]string, 0, len(relations))
+	for _, relation := range relations {
+		switch relation.Kind {
+		case "friend":
+			viewer.Friends[relation.OtherID] = true
+			friends = append(friends, relation.OtherID)
+		case "blocked":
+			viewer.Blocked[relation.OtherID] = true
+		}
 	}
 	if len(friends) == 0 {
 		return viewer, nil
-	}
-	for _, id := range friends {
-		viewer.Friends[id] = true
 	}
 	query, args, err := sqlx.In(`SELECT user_low_id, user_high_id FROM friendships WHERE user_low_id IN (?) OR user_high_id IN (?)`, friends, friends)
 	if err != nil {
