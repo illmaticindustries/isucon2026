@@ -39,6 +39,17 @@ func TestStandardCorpusAndTruncation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// Go 1.27 added these four fixtures and support for their sampling
+			// ratios. Preserve the Go 1.26.5 acceptance policy used by the app;
+			// upgrading the toolchain must not expand accepted upload formats.
+			switch filepath.Base(path) {
+			case "video-001.q50.121121.jpeg", "video-001.q50.211211.jpeg",
+				"video-001.q50.221122.jpeg", "video-001.q50.222112.jpeg":
+				if _, err := Validate(bytes.NewReader(data)); err != errUnsupportedSubsamplingRatio {
+					t.Fatalf("Go 1.26.5 rejection: got %v want %v", err, errUnsupportedSubsamplingRatio)
+				}
+				return
+			}
 			compare(t, data)
 			for _, end := range []int{0, 1, 2, len(data) / 4, len(data) / 2, len(data) - 3, len(data) - 1} {
 				compare(t, data[:end])
