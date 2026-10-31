@@ -14,7 +14,7 @@ Python 3、Git、Go（go.mod指定版）、OpenSSH、tarが必要。SSH鍵と確
 
 `HOSTS=asia1` で1台だけを指定できる。既定はasia1、europe1、america1の順次反映。SSH設定は `SSH_OPTIONS` で上書きできる。CI経由のログインは必須ではない。
 
-デプロイはoriginをfetchして指定コミットが共有ブランチに含まれることを確認し、一時ディレクトリにgit archiveで展開してテスト・Linux amd64ビルドする。未コミット変更を成果物に含めない。反映対象はGoバイナリ、sql/init.sh、sql/reset.sql。指定REFに005-image-cache.sql・006-notification-batches.sql・007-user-search.sqlが含まれる場合は、ビルドとテストの成功後、アプリを更新する前に同じ共有予約内でasia2へ適用する。既存データと世代を保持する追加テーブル・検索用列の冪等な作成だけが対象で、001-schema.sqlなど再構築SQLは自動実行しない。HOSTS=asia1などの指定でも追加スキーマの対象は共有DBのasia2。SQL失敗時はアプリ更新を始めず予約を保持する。その他のDB変更、nginx、systemd、環境変数、静的ファイルの変更は対応する明示的なMakeターゲットで行う。
+デプロイはoriginをfetchして指定コミットが共有ブランチに含まれることを確認し、一時ディレクトリにgit archiveで展開してテスト・Linux amd64ビルドする。未コミット変更を成果物に含めない。反映対象はGoバイナリ、sql/init.sh、sql/reset.sql。指定REFに005-image-cache.sql・006-notification-batches.sql・007-user-search.sql・009-image-storage-external.sqlが含まれる場合は、ビルドとテストの成功後、アプリを更新する前に同じ共有予約内でasia2へ適用する。既存データと世代を保持する追加テーブル・検索用列の冪等な作成と、画像列の保存方式（圧縮を試さないEXTERNAL。未設定時のみ、ロック待ち3秒で中止）だけが対象で、001-schema.sqlなど再構築SQLは自動実行しない。HOSTS=asia1などの指定でも追加スキーマの対象は共有DBのasia2。SQL失敗時はアプリ更新を始めず予約を保持する。その他のDB変更、nginx、systemd、環境変数、静的ファイルの変更は対応する明示的なMakeターゲットで行う。
 
 各ホストで排他ロックを取得し、既存ファイルをバックアップしてサービス停止・配置・起動する。稼働確認はサービス状態と未認証GET /api/meの401。DBを含む全機能検証の代わりにはならない。POST /api/initializeは実行しない。
 
