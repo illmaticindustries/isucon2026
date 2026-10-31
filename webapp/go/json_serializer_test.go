@@ -53,3 +53,31 @@ func TestFastJSONCompatibility(t *testing.T) {
 		}
 	}
 }
+
+func BenchmarkHTTPJSONFeed(b *testing.B) {
+	value := getFeedResponse{Items: make([]feedItemResponse, 50), HasMore: true}
+	for i := range value.Items {
+		value.Items[i].createPostResponse = createPostResponse{
+			ID: "post-identifier", PostingWindowID: "window-identifier",
+			ImageURL: "/api/images/image-identifier?exp=1793509200&sig=signature",
+			Caption:  "日本語の投稿 <test>", Visibility: "public",
+			PostedAt: time.Unix(1793420000, 0).UTC(), OnTime: true,
+		}
+	}
+	for name, serializer := range map[string]echo.JSONSerializer{
+		"standard": echo.DefaultJSONSerializer{}, "goccy": fastJSONSerializer{},
+	} {
+		b.Run(name, func(b *testing.B) {
+			recorder := httptest.NewRecorder()
+			context := echo.New().NewContext(httptest.NewRequest("GET", "/", nil), recorder)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				recorder.Body.Reset()
+				if err := serializer.Serialize(context, value, ""); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
