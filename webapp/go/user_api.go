@@ -126,13 +126,12 @@ func loginHandler(h *HandlerContext) echo.HandlerFunc {
 			return NewAPIError(http.StatusUnauthorized, "invalid_credentials")
 		}
 		ctx := c.Request().Context()
-		tx, err := h.DB.BeginTxx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
+		// Validate credentials with a single read. The benchmark sends a large
+		// volume of invalid logins; those must not open a transaction or hold a
+		// connection through Begin/Rollback (previously one rolled-back xact
+		// per attempt, tens of thousands per run).
 		var user User
-		err = tx.GetContext(ctx, &user, `SELECT id, username, secret_key_hash, display_name, bio, profile_image_id, region, account_type, status FROM users WHERE username = $1 FOR SHARE`, input.Username)
+		err := h.DB.GetContext(ctx, &user, `SELECT id, username, secret_key_hash, display_name, bio, profile_image_id, region, account_type, status FROM users WHERE username = $1`, input.Username)
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewAPIError(http.StatusUnauthorized, "invalid_credentials")
 		}
@@ -142,6 +141,19 @@ func loginHandler(h *HandlerContext) echo.HandlerFunc {
 		hash := sha256.Sum256([]byte(input.SecretKey))
 		if user.Status != "active" || user.SecretKeyHash != hex.EncodeToString(hash[:]) {
 			return NewAPIError(http.StatusUnauthorized, "invalid_credentials")
+		}
+		// Only a valid login takes a transaction, and it re-locks the user so a
+		// concurrent status change or deletion is honoured.
+		tx, err := h.DB.BeginTxx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if err := tx.GetContext(ctx, &user, `SELECT id, username, secret_key_hash, display_name, bio, profile_image_id, region, account_type, status FROM users WHERE id = $1 AND status = 'active' FOR SHARE`, user.ID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return NewAPIError(http.StatusUnauthorized, "invalid_credentials")
+			}
+			return err
 		}
 		session, err := replaceSessionForLockedUser(ctx, tx, user.ID)
 		if err != nil {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"os/signal"
+	"runtime/debug"
 	"sync"
 	"syscall"
 	"time"
@@ -16,6 +17,10 @@ import (
 // 2026-09-23
 
 func main() {
+	// The app allocates heavily per request (JPEG validation, image bytea) but
+	// holds a modest live set. Trading some RSS for fewer GC cycles reduces the
+	// GC CPU that competes with request handling on an already busy host.
+	debug.SetGCPercent(400)
 	config := isureal.ConfigFromEnv()
 	db := isureal.OpenDatabase(config)
 	defer db.Close()
