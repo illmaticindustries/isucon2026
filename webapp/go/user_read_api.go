@@ -69,7 +69,7 @@ func searchUsersHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		defer tx.Rollback()
-		rows, err := tx.QueryContext(ctx, `SELECT id, username, display_name FROM users WHERE status='active' AND id<>$1 AND ($2='' OR (username,id)>($2,$3)) ORDER BY username, id`, viewer, input.BeforeUsername, input.BeforeID)
+		rows, err := tx.QueryContext(ctx, searchCandidateQuery, viewer, input.BeforeUsername, input.BeforeID, query)
 		if err != nil {
 			return err
 		}
