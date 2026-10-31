@@ -62,6 +62,11 @@ func searchUsersHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		query := normalizeSearchText(input.Q)
+		// PostgreSQL text cannot contain NUL, but the API accepts it in q. The
+		// original Go comparison therefore returns no matches, not a SQL error.
+		if strings.ContainsRune(query, '\x00') {
+			return c.JSON(http.StatusOK, searchUsersResponse{Items: []relationshipUserResponse{}})
+		}
 		// Match on narrow rows and stop at 51 matches; decoding every column of every
 		// active user dominated asia1 CPU. Both queries share one snapshot.
 		tx, err := h.DB.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
@@ -69,7 +74,7 @@ func searchUsersHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		defer tx.Rollback()
-		rows, err := tx.QueryContext(ctx, `SELECT id, username, display_name FROM users WHERE status='active' AND id<>$1 AND ($2='' OR (username,id)>($2,$3)) ORDER BY username, id`, viewer, input.BeforeUsername, input.BeforeID)
+		rows, err := tx.QueryContext(ctx, searchCandidateQuery, viewer, input.BeforeUsername, input.BeforeID, query)
 		if err != nil {
 			return err
 		}

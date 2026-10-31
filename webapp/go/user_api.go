@@ -101,8 +101,11 @@ func registerHandler(h *HandlerContext) echo.HandlerFunc {
 			return NewAPIError(http.StatusConflict, "username_taken")
 		}
 		userID := uuid.NewString()
-		if _, err := tx.ExecContext(ctx, `INSERT INTO users (id, username, secret_key_hash, display_name, region) VALUES ($1, $2, $3, $4, $5)`,
-			userID, input.Username, hex.EncodeToString(hash[:]), input.DisplayName, input.Region); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO users (id, username, secret_key_hash, display_name, region,
+ search_username_source, search_display_name_source, search_username_normalized, search_display_name_normalized)
+ VALUES ($1, $2::text, $3, $4::text, $5, $2::text, $4::text, $6, $7)`,
+			userID, input.Username, hex.EncodeToString(hash[:]), input.DisplayName, input.Region,
+			normalizeSearchText(input.Username), normalizeSearchText(input.DisplayName)); err != nil {
 			return err
 		}
 		user, err := getUser(ctx, tx, userID)
@@ -207,14 +210,21 @@ func updateMeHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		defer tx.Rollback()
+		var searchName *string
+		if input.DisplayName != nil {
+			normalized := normalizeSearchText(*input.DisplayName)
+			searchName = &normalized
+		}
 		if _, err := tx.ExecContext(ctx, `
    UPDATE users SET
-     display_name = COALESCE($2, display_name),
+     display_name = COALESCE($2::text, display_name),
+     search_display_name_source = CASE WHEN $2::text IS NULL THEN search_display_name_source ELSE $2::text END,
+     search_display_name_normalized = COALESCE($5, search_display_name_normalized),
      bio = COALESCE($3, bio),
      region = COALESCE($4, region),
      updated_at = clock_timestamp()
    WHERE id = $1
-  `, session.UserID, input.DisplayName, input.Bio, input.Region); err != nil {
+  `, session.UserID, input.DisplayName, input.Bio, input.Region, searchName); err != nil {
 			return err
 		}
 		user, err := getUser(ctx, tx, session.UserID)
