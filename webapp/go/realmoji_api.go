@@ -144,17 +144,17 @@ func getRealMojisHandler(h *HandlerContext) echo.HandlerFunc {
 		if !allowed {
 			return NewAPIError(http.StatusForbidden, "interaction_forbidden")
 		}
-		reactions, err := selectCurrentRealMojis(ctx, h.DB, `AND r.post_id=$1 AND ($2::timestamptz IS NULL OR (r.created_at,r.id)<($2,$3)) ORDER BY r.created_at DESC,r.id DESC LIMIT 51`, input.PostID, input.BeforeCreatedAt, input.BeforeID)
+		reactions, err := selectCurrentRealMojis(ctx, h.DB, currentRealMojiSelect+`AND r.post_id=$1 AND ($2::timestamptz IS NULL OR (r.created_at,r.id)<($2,$3)) ORDER BY r.created_at DESC,r.id DESC LIMIT 51`, input.PostID, input.BeforeCreatedAt, input.BeforeID)
 		if err != nil {
 			return err
+		}
+		hasMore := len(reactions) > 50
+		if hasMore {
+			reactions = reactions[:50]
 		}
 		items := make([]replaceRealMojiResponse, 0, len(reactions))
 		for _, reaction := range reactions {
 			items = append(items, newRealMojiResponse(reaction.RealMoji, reaction.Reactor))
-		}
-		hasMore := len(items) > 50
-		if hasMore {
-			items = items[:50]
 		}
 		return c.JSON(http.StatusOK, getRealMojisResponse{Items: items, HasMore: hasMore})
 	}
