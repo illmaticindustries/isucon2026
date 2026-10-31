@@ -6,7 +6,7 @@ SELECT c.relname AS index_name, i.indisvalid, i.indisready,
 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
 WHERE c.relnamespace = 'public'::regnamespace
   AND c.relname IN (
-    'realmojis_active_image_reactor', 'posts_active_image_author',
+    'realmojis_active_image_reactor', 'posts_active_image_author', 'posts_live_window_author',
     'friendships_high_low', 'block_relations_blocked_blocker',
     'users_username', 'login_sessions_active_token', 'login_sessions_active_user',
     'friend_requests_pending_pair'
@@ -18,7 +18,7 @@ DO $$
 BEGIN
   IF EXISTS (
     SELECT 1 FROM (VALUES
-      ('realmojis_active_image_reactor'), ('posts_active_image_author'),
+      ('realmojis_active_image_reactor'), ('posts_active_image_author'), ('posts_live_window_author'),
       ('friendships_high_low'), ('block_relations_blocked_blocker'),
       ('users_username'), ('login_sessions_active_token'), ('login_sessions_active_user'),
       ('friend_requests_pending_pair')

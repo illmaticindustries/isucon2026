@@ -14,7 +14,9 @@ func selectChronologicalFeed(ctx context.Context, db sqlx.QueryerContext, viewer
 	predicate := ""
 	switch input.Feed {
 	case "friends":
-		predicate = `p.author_id IN (SELECT id FROM viewer_friends)
+		// Compute the friend IDs once so PostgreSQL can probe the live posts
+		// index by both open window and author, even with a prepared plan.
+		predicate = `p.author_id = ANY(ARRAY(SELECT id FROM viewer_friends))
     AND p.visibility IN ('public', 'friends', 'friends_of_friends')`
 	case "public":
 		predicate = `p.visibility = 'public'`
@@ -46,10 +48,10 @@ func selectChronologicalFeed(ctx context.Context, db sqlx.QueryerContext, viewer
  ), candidates AS MATERIALIZED (
    SELECT p.id, p.posted_at
    FROM posts p
-   JOIN posting_windows w ON w.id=p.posting_window_id AND w.ended_at IS NULL
    JOIN users author ON author.id=p.author_id AND author.status='active'
    CROSS JOIN viewer v
    WHERE v.has_posted AND p.author_id<>$1 AND p.deleted_at IS NULL
+     AND p.posting_window_id = ANY(ARRAY(SELECT id FROM posting_windows WHERE ended_at IS NULL))
      AND ($2::timestamptz IS NULL OR (p.posted_at,p.id)<($2,$3))
      AND NOT EXISTS (
        SELECT 1 FROM block_relations b
