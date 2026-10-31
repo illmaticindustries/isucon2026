@@ -79,7 +79,7 @@ func TestSearchPostgres(t *testing.T) {
 			t.Fatal(err)
 		}
 		fold := func(s string) string { return norm.NFC.String(cases.Fold().String(norm.NFC.String(s))) }
-		for _, query := range []string{"user", "STRASSE", "CAFÉ", "ΟΣ", "i̇", "ffi", "%", "_", "\\", "not-present"} {
+		for _, query := range []string{"user", "STRASSE", "CAFÉ", "ΟΣ", "i̇", "ffi", "%", "_", "\\", "\x00", "not-present"} {
 			var expected, got []string
 			for _, u := range all {
 				if !blocked[u.ID] && (strings.Contains(fold(u.Username), fold(query)) || strings.Contains(fold(u.DisplayName), fold(query))) {
