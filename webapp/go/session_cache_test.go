@@ -1,9 +1,40 @@
 package isureal
 
 import (
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/labstack/echo/v5"
 )
+
+func TestSessionCacheableRoutePatterns(t *testing.T) {
+	cases := []struct {
+		method  string
+		pattern string
+		want    bool
+	}{
+		{"GET", "/api/users", false},
+		{"POST", "/api/posts", false},
+		{"POST", "/api/friend-requests", false},
+		{"POST", "/api/friend-requests/:requestId/:action", false},
+		// Every other route is served in-region and may be cached.
+		{"GET", "/api/users/:userId", true},
+		{"POST", "/api/posts/:postId/comments", true},
+		{"PATCH", "/api/me", true},
+		{"GET", "/api/feeds/:feed", true},
+		{"PUT", "/api/me/profile-image", true},
+	}
+	e := echo.New()
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, "/", nil)
+		c := e.NewContext(req, httptest.NewRecorder())
+		c.SetPath(tc.pattern)
+		if got := sessionCacheable(c); got != tc.want {
+			t.Errorf("%s %s: got %v want %v", tc.method, tc.pattern, got, tc.want)
+		}
+	}
+}
 
 func TestSessionCacheStoreLoadAndInvalidate(t *testing.T) {
 	clearSessionCache()
