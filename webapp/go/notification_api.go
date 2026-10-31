@@ -19,6 +19,7 @@ type getNotificationsResponse struct {
 }
 
 func getNotificationsHandler(h *HandlerContext) echo.HandlerFunc {
+	var polls notificationPollQueue
 	return func(c *echo.Context) error {
 		ctx := c.Request().Context()
 		session := GetSession(c)
@@ -39,37 +40,7 @@ func getNotificationsHandler(h *HandlerContext) echo.HandlerFunc {
 		for {
 			// Return the active recipient even when no notification is ready,
 			// so retirement/region changes still terminate the stream promptly.
-			var row struct {
-				Region          string         `db:"region"`
-				ID              sql.NullString `db:"id"`
-				WindowID        sql.NullString `db:"posting_window_id"`
-				WindowRegion    sql.NullString `db:"window_region"`
-				CreatedAt       sql.NullTime   `db:"created_at"`
-				Generation      int64          `db:"generation"`
-				BatchCandidates []byte         `db:"batch_candidates"`
-			}
-			err := h.DB.GetContext(ctx, &row, `
-                SELECT u.region, n.id, n.posting_window_id, n.window_region, n.created_at,
-                       g.generation, b.candidates AS batch_candidates
-                FROM users u
-                LEFT JOIN LATERAL (
-                    SELECT n.id, n.posting_window_id, w.region AS window_region, n.created_at
-                    FROM notifications n JOIN posting_windows w ON w.id = n.posting_window_id
-                    WHERE n.user_id = u.id AND n.created_at > $2 AND w.ended_at IS NULL
-                    ORDER BY n.created_at, n.id LIMIT 1
-                ) n ON true
-                CROSS JOIN image_cache_generation g
-                LEFT JOIN LATERAL (
-                    SELECT COALESCE(jsonb_agg(jsonb_build_object(
-                        'postingWindowId', b.posting_window_id,
-                        'region', w.region, 'createdAt', b.created_at)
-                        ORDER BY b.created_at, b.posting_window_id), '[]'::jsonb) AS candidates
-                    FROM notification_batches b
-                    JOIN posting_windows w ON w.id = b.posting_window_id
-                    WHERE w.ended_at IS NULL AND b.created_at > $2
-                ) b ON true
-                WHERE u.id = $1 AND u.status = 'active'
-            `, userID, connectedAt)
+			row, err := polls.read(ctx, h.DB, userID, connectedAt)
 			if err != nil {
 				if !errors.Is(err, sql.ErrNoRows) && ctx.Err() == nil {
 					c.Logger().Error("failed to get notification recipient", "error", err)
