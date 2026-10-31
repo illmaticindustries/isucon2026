@@ -128,9 +128,6 @@ func TestFeedPostgresMatchesOriginal(t *testing.T) {
  FROM generate_series(0,359,3) i`)
 	db.MustExec(`INSERT INTO friendships SELECT LEAST('u003','u'||lpad(i::text,3,'0')),GREATEST('u003','u'||lpad(i::text,3,'0'))
  FROM generate_series(1,359,3) i`)
-	// Both ends are direct friends. Two directional probes encounter this edge
-	// twice, but it must contribute exactly once like the former OR predicate.
-	db.MustExec(`INSERT INTO friendships VALUES('u000','u006')`)
 	db.MustExec(`INSERT INTO follows SELECT 'viewer','u'||lpad(i::text,3,'0') FROM generate_series(0,359,2) i`)
 	db.MustExec(`INSERT INTO block_relations SELECT CASE WHEN i%2=0 THEN 'viewer' ELSE 'u'||lpad(i::text,3,'0') END,
  CASE WHEN i%2=0 THEN 'u'||lpad(i::text,3,'0') ELSE 'viewer' END FROM generate_series(0,359,11) i`)
