@@ -17,16 +17,48 @@ health() {
     return 1
 }
 restore() {
-    test -f "$state/previous/go/isureal"
+    local saved=${1:-"$state/previous"}
+    test -f "$saved/go/isureal"
     sudo -n systemctl stop isureal-go
-    cp -p "$state/previous/go/isureal" "$base/go/isureal"
-    cp -p "$state/previous/sql/init.sh" "$base/sql/init.sh"
-    cp -p "$state/previous/sql/reset.sql" "$base/sql/reset.sql"
-    cp "$state/previous/revision" "$base/.deploy-revision"
+    cp -p "$saved/go/isureal" "$base/go/isureal"
+    cp -p "$saved/sql/init.sh" "$base/sql/init.sh"
+    cp -p "$saved/sql/reset.sql" "$base/sql/reset.sql"
+    cp "$saved/revision" "$base/.deploy-revision"
     sudo -n systemctl start isureal-go
     health
 }
 case "${1:-}" in
+photo-prepare)
+    rev=$2 expected=$3 site_hash=$4
+    [[ "$rev" =~ ^[0-9a-f]{40}$ && "$expected" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid revision" >&2; exit 1; }
+    test "$(cat "$base/.deploy-revision")" = "$expected"
+    echo "$site_hash  $nginx/sites-available/isureal.conf" | sha256sum --check --status
+    saved="$state/photo-$rev"
+    if test -d "$saved"; then
+        test "$(cat "$saved/revision")" = "$expected"
+        cmp "$nginx/sites-available/isureal.conf" "$saved/site.conf"
+        exit 0
+    fi
+    tmp=$(mktemp -d "$state/photo-save.XXXXXXXX")
+    mkdir "$tmp/go" "$tmp/sql"
+    cp -p "$base/go/isureal" "$tmp/go/"
+    cp -p "$base/sql/init.sh" "$base/sql/reset.sql" "$tmp/sql/"
+    cp -p "$base/.deploy-revision" "$tmp/revision"
+    cp -p "$nginx/sites-available/isureal.conf" "$tmp/site.conf"
+    mv -T "$tmp" "$saved"
+    ;;
+photo-rollback)
+    rev=$2 expected=$3
+    [[ "$rev" =~ ^[0-9a-f]{40}$ && "$expected" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid revision" >&2; exit 1; }
+    current=$(cat "$base/.deploy-revision")
+    [[ "$current" = "$rev" || "$current" = "$expected" ]] || { echo "Deployed revision changed" >&2; exit 1; }
+    saved="$state/photo-$rev"
+    if test ! -d "$saved" && test "$current" = "$expected"; then exit 0; fi
+    test "$(cat "$saved/revision")" = "$expected"
+    sudo -n install -m 644 "$saved/site.conf" "$nginx/sites-available/isureal.conf"
+    sudo -n nginx -t && sudo -n systemctl reload nginx || exit 1
+    restore "$saved"
+    ;;
 rollback)
     restore
     echo 'Restored previous application files; database schema was not changed.'
@@ -57,7 +89,7 @@ deploy)
     health
     trap - EXIT
     ;;
-nginx)
+nginx|photo-nginx)
     stage=$2
     host=${3:-asia1}
     tar -xf "$stage/nginx.tar" -C "$stage"
@@ -84,10 +116,10 @@ nginx)
     cp -p "$nginx/nginx.conf" "$backup/nginx.conf"
     cp -p "$nginx/sites-available/isureal.conf" "$backup/isureal.conf"
     # Keep the running config if the new one fails validation.
-    sudo -n install -m 644 "$stage/nginx/nginx.conf" "$nginx/nginx.conf"
+    if [ "$1" = nginx ]; then sudo -n install -m 644 "$stage/nginx/nginx.conf" "$nginx/nginx.conf"; fi
     sudo -n install -m 644 "$stage/nginx/sites-available/$site" "$nginx/sites-available/isureal.conf"
     if ! sudo -n nginx -t; then
-        sudo -n install -m 644 "$backup/nginx.conf" "$nginx/nginx.conf"
+        if [ "$1" = nginx ]; then sudo -n install -m 644 "$backup/nginx.conf" "$nginx/nginx.conf"; fi
         sudo -n install -m 644 "$backup/isureal.conf" "$nginx/sites-available/isureal.conf"
         echo "nginx -t failed; restored $backup" >&2
         exit 1

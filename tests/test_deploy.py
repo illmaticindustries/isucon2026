@@ -1,4 +1,5 @@
 """Exercise activation and automatic rollback with local fake services."""
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -48,6 +49,52 @@ class DeployTest(unittest.TestCase):
                 subprocess.run(['bash', '-s', '--', 'rollback'], input=script, text=True, env=env, check=True, capture_output=True)
                 self.assertEqual((base/'go/isureal').read_text(), 'old')
                 self.assertEqual((base/'.deploy-revision').read_text(), 'old-sha\n')
+
+    def test_photo_rollback_restores_exact_snapshot_and_preserves_global_nginx(self):
+        old, candidate = 'a' * 40, 'b' * 40
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base, state, nginx, bins = [root/n for n in ('webapp', 'state', 'nginx', 'bin')]
+            for path in (base/'go', base/'sql', nginx/'sites-available', bins):
+                path.mkdir(parents=True)
+            for relative in ('go/isureal', 'sql/init.sh', 'sql/reset.sql'):
+                (base/relative).write_text('old ' + relative)
+            (base/'.deploy-revision').write_text(old)
+            site = nginx/'sites-available/isureal.conf'
+            site.write_text('old active site')
+            (nginx/'nginx.conf').write_text('teammate global configuration')
+            digest = hashlib.sha256(site.read_bytes()).hexdigest()
+            mocks = {
+                'flock': 'exit 0',
+                'systemctl': 'exit 0',
+                'sudo': 'shift; exec "$@"',
+                'nginx': 'exit 0',
+                'curl': 'printf 401',
+                'mv': 'if [ "$1" = -T ]; then shift; fi; exec /bin/mv "$@"',
+                'sha256sum': 'read -r hash path; test "$hash" = "$(shasum -a 256 "$path" | cut -d" " -f1)"'
+            }
+            for name, command in mocks.items():
+                (bins/name).write_text('#!/bin/bash\n' + command + '\n')
+                (bins/name).chmod(0o755)
+            script = (ROOT/'scripts/deploy-remote.sh').read_text().replace(
+                'base=/home/isucon/webapp', 'base='+str(base)).replace(
+                'state=/home/isucon/.isureal-deploy', 'state='+str(state)).replace('nginx=/etc/nginx', 'nginx='+str(nginx))
+            def invoke(*args, check=True):
+                return subprocess.run(['bash','-s','--',*args],text=True,input=script,check=check,
+                                      env=dict(os.environ,PATH=str(bins)+':'+os.environ['PATH']),capture_output=True)
+            self.assertNotEqual(invoke('photo-prepare',candidate,old,'0'*64,check=False).returncode,0)
+            invoke('photo-prepare',candidate,old,digest)
+            invoke('photo-prepare',candidate,old,digest)
+            site.write_text('candidate site')
+            (base/'go/isureal').write_text('candidate binary')
+            (base/'.deploy-revision').write_text('c'*40)
+            self.assertNotEqual(invoke('photo-rollback',candidate,old,check=False).returncode,0)
+            (base/'.deploy-revision').write_text(candidate)
+            invoke('photo-rollback',candidate,old)
+            self.assertEqual((base/'go/isureal').read_text(), 'old go/isureal')
+            self.assertEqual((base/'.deploy-revision').read_text(),old)
+            self.assertEqual(site.read_text(),'old active site')
+            self.assertEqual((nginx/'nginx.conf').read_text(),'teammate global configuration')
 
     def test_success_and_manual_rollback(self):
         self.exercise()

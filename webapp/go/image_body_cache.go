@@ -14,6 +14,7 @@ type imageBodyKey struct {
 	OwnerKey  string
 }
 type cachedImageBody struct {
+	Regional  bool
 	Data      []byte
 	MediaType string
 }

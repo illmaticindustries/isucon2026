@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
+	"os"
 	"os/signal"
 	"sync"
 	"syscall"
@@ -19,6 +21,15 @@ func main() {
 	config := isureal.ConfigFromEnv()
 	db := isureal.OpenDatabase(config)
 	defer db.Close()
+	if len(os.Args) == 2 {
+		if err := isureal.RegionalPhotoCommand(context.Background(), db, config, os.Args[1]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	if len(os.Args) != 1 {
+		log.Fatal("unknown command")
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	listeners := map[string]string{":8080": config.Region}

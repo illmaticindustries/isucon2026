@@ -1,6 +1,7 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 export REF ?= HEAD
+export EXPECT_REF ?=
 export HOSTS ?= asia1 europe1 america1
 export DEPLOY_WORKERS ?= 3
 export SSH_OPTIONS ?= -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes
@@ -17,7 +18,7 @@ help:
 	@echo 'After Enqueue: make measure [MEASURE_SECONDS=60]'
 	@echo 'Before Enqueue: make bench-reserve PORTAL_IDLE=yes; after completion: make bench-release PORTAL_IDLE=yes OPERATION_TOKEN=<token>'
 
-regional-deploy build deploy preflight rollback status logs deploy-indexes verify-indexes nginx-log alp nginx-deploy alp-install:
+regional-photo-deploy regional-photo-rollback regional-deploy build deploy preflight rollback status logs deploy-indexes verify-indexes nginx-log alp nginx-deploy alp-install:
 	python3 scripts/deploy.py $@ --ref "$$REF" --hosts "$$HOSTS"
 
 go-build-local: build
@@ -51,3 +52,5 @@ measure:
 	python3 scripts/measure.py
 
 .PHONY: regional-deploy
+
+.PHONY: regional-photo-deploy regional-photo-rollback

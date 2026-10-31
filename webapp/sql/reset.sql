@@ -5,7 +5,7 @@ BEGIN;
 -- A new epoch invalidates image-body caches in every application process.
 UPDATE image_cache_generation SET generation = generation + 1;
 
-TRUNCATE ip_bans, login_sessions, administrator_sessions, friendships, friend_requests, follows, block_relations;
+TRUNCATE regional_post_photos, ip_bans, login_sessions, administrator_sessions, friendships, friend_requests, follows, block_relations;
 
 DELETE FROM notification_batches WHERE created_at > (SELECT created_at FROM initial_data_boundary);
 DELETE FROM notifications WHERE created_at > (SELECT created_at FROM initial_data_boundary);

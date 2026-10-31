@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v5"
 )
 
@@ -19,7 +20,22 @@ func exportPostsHandler(h *HandlerContext) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		ctx := c.Request().Context()
 		userID := GetSession(c).UserID
-		author, err := getUser(ctx, h.DB, userID)
+		var reader sqlx.QueryerContext = h.DB
+		var tx *sqlx.Tx
+		if h.Photos != nil {
+			// Keep reset from unlinking the snapshot's original files while constructing the ZIP.
+			var err error
+			tx, err = h.DB.BeginTxx(ctx, nil)
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback()
+			if _, err = tx.ExecContext(ctx, "SELECT generation FROM image_cache_generation FOR SHARE"); err != nil {
+				return err
+			}
+			reader = tx
+		}
+		author, err := getUser(ctx, reader, userID)
 		if err != nil {
 			return err
 		}
@@ -27,7 +43,7 @@ func exportPostsHandler(h *HandlerContext) echo.HandlerFunc {
 			Post
 			ImageData []byte `db:"image_data"`
 		}
-		if err := h.DB.SelectContext(ctx, &posts, `
+		if err := sqlx.SelectContext(ctx, reader, &posts, `
    SELECT `+postColumns+`, i.data AS image_data
    FROM posts p
    JOIN posting_windows w ON w.id = p.posting_window_id
@@ -49,7 +65,11 @@ func exportPostsHandler(h *HandlerContext) echo.HandlerFunc {
 			if err != nil {
 				return err
 			}
-			if _, err := image.Write(post.ImageData); err != nil {
+			data, err := h.Photos.resolve(ctx, post.ImageData)
+			if err != nil {
+				return err
+			}
+			if _, err := image.Write(data); err != nil {
 				return err
 			}
 			items = append(items, exportPostResponse{createPostResponse: newPostResponse(post.Post, author), ImagePath: imagePath})
@@ -63,6 +83,11 @@ func exportPostsHandler(h *HandlerContext) echo.HandlerFunc {
 		}
 		if err := writer.Close(); err != nil {
 			return err
+		}
+		if tx != nil {
+			if err := tx.Commit(); err != nil {
+				return err
+			}
 		}
 		c.Response().Header().Set(echo.HeaderContentDisposition, `attachment; filename="isureal-posts.zip"`)
 		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
