@@ -27,6 +27,11 @@ func main() {
 		// a different region. Traffic from remote nginx still follows the router.
 		listeners["192.168.1.10:8081"] = "europe"
 		listeners["192.168.1.10:8082"] = "america"
+		// asia1 is CPU-bound; the idle remote hosts compute bulk image signatures.
+		isureal.SetRemoteSigners([]string{"192.168.2.10:8090", "192.168.3.10:8090"})
+	}
+	if address, ok := map[string]string{"europe": "192.168.2.10:8090", "america": "192.168.3.10:8090"}[config.Region]; ok {
+		isureal.StartSignatureService(ctx, address, "192.168.1.10")
 	}
 	var wg sync.WaitGroup
 	errorsCh := make(chan error, len(listeners))

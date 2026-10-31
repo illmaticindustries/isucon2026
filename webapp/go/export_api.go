@@ -39,6 +39,13 @@ func exportPostsHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 
+		// Sign every post image in one batch before building the manifest.
+		requests := appendProfileSignatureRequest(make([]signatureRequest, 0, len(posts)+1), author)
+		for _, post := range posts {
+			requests = appendImageSignatureRequests(requests, author, post.ImageID)
+		}
+		prefetchImageSignatures(ctx, requests)
+
 		var body bytes.Buffer
 		writer := zip.NewWriter(&body)
 		defer writer.Close()

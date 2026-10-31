@@ -83,7 +83,35 @@ func listMemories(ctx context.Context, db sqlx.QueryerContext, userID string, st
 	if err != nil {
 		return response, err
 	}
+	response.HasMore = len(posts) > 50
+	if response.HasMore {
+		posts = posts[:50]
+	}
+	postIDs := make([]string, len(posts))
+	for i, post := range posts {
+		postIDs[i] = post.ID
+	}
+	reactions, comments, err := loadMemoryInteractions(ctx, db, postIDs)
+	if err != nil {
+		return response, err
+	}
+	// Sign the whole page in one batch before building responses.
+	requests := make([]signatureRequest, 0, 2*(len(posts)+len(reactions))+len(comments))
+	for _, post := range posts {
+		requests = appendImageSignatureRequests(requests, post.Author, post.ImageID)
+		requests = appendProfileSignatureRequest(requests, post.Author)
+	}
+	for _, reaction := range reactions {
+		requests = appendImageSignatureRequests(requests, reaction.Reactor, reaction.ImageID)
+		requests = appendProfileSignatureRequest(requests, reaction.Reactor)
+	}
+	for _, comment := range comments {
+		requests = appendProfileSignatureRequest(requests, comment.Author)
+	}
+	prefetchImageSignatures(ctx, requests)
+
 	items := make([]memoryPostResponse, 0, len(posts))
+	itemByPostID := make(map[string]*memoryPostResponse, len(posts))
 	for _, post := range posts {
 		items = append(items, memoryPostResponse{
 			createPostResponse: newPostResponse(post.Post, post.Author),
@@ -91,35 +119,8 @@ func listMemories(ctx context.Context, db sqlx.QueryerContext, userID string, st
 			Comments:           make([]createCommentResponse, 0),
 		})
 	}
-	response.HasMore = len(items) > 50
-	if response.HasMore {
-		items = items[:50]
-	}
-	if err := loadMemoryInteractions(ctx, db, items); err != nil {
-		return response, err
-	}
-	response.Items = items
-	return response, nil
-}
-
-func loadMemoryInteractions(ctx context.Context, db sqlx.QueryerContext, items []memoryPostResponse) error {
-	if len(items) == 0 {
-		return nil
-	}
-	postIDs := make([]string, len(items))
-	itemByPostID := make(map[string]*memoryPostResponse, len(items))
 	for i := range items {
-		postIDs[i] = items[i].ID
 		itemByPostID[items[i].ID] = &items[i]
-	}
-
-	query, args, err := sqlx.In(`AND r.post_id IN (?) ORDER BY r.created_at DESC, r.id DESC`, postIDs)
-	if err != nil {
-		return err
-	}
-	reactions, err := selectCurrentRealMojis(ctx, db, sqlx.Rebind(sqlx.DOLLAR, query), args...)
-	if err != nil {
-		return err
 	}
 	for _, reaction := range reactions {
 		item := itemByPostID[reaction.PostID]
@@ -127,20 +128,37 @@ func loadMemoryInteractions(ctx context.Context, db sqlx.QueryerContext, items [
 			item.RealMojis = append(item.RealMojis, newRealMojiResponse(reaction.RealMoji, reaction.Reactor))
 		}
 	}
-
-	query, args, err = sqlx.In(`AND c.post_id IN (?) ORDER BY c.created_at, c.id`, postIDs)
-	if err != nil {
-		return err
-	}
-	comments, err := selectCommentsWithAuthor(ctx, db, sqlx.Rebind(sqlx.DOLLAR, query), args...)
-	if err != nil {
-		return err
-	}
 	for _, comment := range comments {
 		item := itemByPostID[comment.PostID]
 		if len(item.Comments) < 50 {
 			item.Comments = append(item.Comments, newCommentResponse(comment.Comment, comment.Author))
 		}
 	}
-	return nil
+	response.Items = items
+	return response, nil
+}
+
+// loadMemoryInteractions reads current RealMojis (newest first) and comments
+// (oldest first) for the given posts.
+func loadMemoryInteractions(ctx context.Context, db sqlx.QueryerContext, postIDs []string) ([]RealMojiWithReactor, []CommentWithAuthor, error) {
+	if len(postIDs) == 0 {
+		return nil, nil, nil
+	}
+	query, args, err := sqlx.In(`AND r.post_id IN (?) ORDER BY r.created_at DESC, r.id DESC`, postIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	reactions, err := selectCurrentRealMojis(ctx, db, sqlx.Rebind(sqlx.DOLLAR, query), args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	query, args, err = sqlx.In(`AND c.post_id IN (?) ORDER BY c.created_at, c.id`, postIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	comments, err := selectCommentsWithAuthor(ctx, db, sqlx.Rebind(sqlx.DOLLAR, query), args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	return reactions, comments, nil
 }
