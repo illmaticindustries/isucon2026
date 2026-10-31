@@ -1,0 +1,110 @@
+name: Deploy
+
+# 本番への反映は main へのマージ後に手動で起動し、
+# GitHub Environments "production" の承認者による承認を経て実行する。
+# 必要な設定（人間が行う）:
+#   - Settings > Environments > production に required reviewers を設定
+#   - production environment の secrets: DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS
+#   - デプロイ用ユーザーに許可する権限（サービス再起動のみ等）はインフラ担当が決める
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  APP: isureal
+  SERVICE: isureal-go.service # TODO: 実際のサービス名を確認する
+  APP_DIR: /home/isucon/webapp/go
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    defaults:
+      run:
+        working-directory: webapp/go
+    steps:
+      # 休日は障害対応できる人員が少ないため反映しない（AGENTS.md 2.4）
+      - name: Reject weekend deploy
+        run: |
+          dow=$(TZ=Asia/Tokyo date +%u)
+          if [ "$dow" -ge 6 ]; then
+            echo "::error::土日（JST）のデプロイは禁止されています"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: webapp/go/go.mod
+          cache-dependency-path: webapp/go/go.sum
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        run: GOOS=linux GOARCH=amd64 go build -o ${{ env.APP }} ./cmd/${{ env.APP }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP }}
+          path: webapp/go/${{ env.APP }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.APP }}
+
+      - name: Set up SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+      # 新しいバイナリは別名で置き、旧バイナリを .prev として残してから入れ替える
+      - name: Upload binary
+        env:
+          TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
+        run: |
+          scp -i ~/.ssh/id_deploy ${APP} "${TARGET}:${APP_DIR}/${APP}.new"
+          ssh -i ~/.ssh/id_deploy "$TARGET" "
+            set -e
+            cd ${APP_DIR}
+            chmod +x ${APP}.new
+            if [ -f ${APP} ]; then cp -p ${APP} ${APP}.prev; fi
+            mv ${APP}.new ${APP}"
+
+      # TODO: 再起動の方法（デプロイ用ユーザーの権限）はインフラ担当と決める
+      - name: Restart service
+        env:
+          TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
+        run: ssh -i ~/.ssh/id_deploy "$TARGET" "sudo systemctl restart ${SERVICE}"
+
+      # TODO: 専用のヘルスチェックエンドポイントがないため、8080 が応答するかだけを見ている
+      - name: Health check
+        env:
+          TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
+        run: |
+          for i in $(seq 1 10); do
+            if ssh -i ~/.ssh/id_deploy "$TARGET" "curl -s -o /dev/null http://localhost:8080/"; then
+              echo "ok"; exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::ヘルスチェックに失敗しました。${APP}.prev への切り戻しを検討してください"
+          exit 1
+
+      - name: Clean up SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_deploy
