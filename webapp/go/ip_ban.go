@@ -11,7 +11,7 @@ import (
 	"github.com/labstack/echo/v5"
 )
 
-const ipBanReloadInterval = 200 * time.Millisecond
+const ipBanReloadInterval = 1 * time.Second
 
 type IPBanList struct {
 	reloading sync.Mutex
