@@ -8,6 +8,7 @@ export SSH_OPTIONS ?= -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChec
 help:
 	@echo 'make preflight | build | deploy | rollback | status | logs [REF=<pushed commit>] [HOSTS="asia1 europe1 america1"]'
 	@echo 'make deploy-indexes | verify-indexes REF=<pushed commit> HOSTS=asia2'
+	@echo 'make deploy-cache-schema REF=<pushed commit> PORTAL_IDLE=yes (before first image-cache app deployment)'
 	@echo 'make nginx-deploy REF=<pushed commit> | alp-install | alp | nginx-log [HOSTS=...]'
 	@echo 'Mutations require PORTAL_IDLE=yes after checking the portal.'
 	@echo 'After Enqueue: make measure [MEASURE_SECONDS=60]'
@@ -27,8 +28,8 @@ export PORTAL_IDLE ?= no
 export OPERATION_TOKEN ?=
 export BENCH_NOTE ?= portal benchmark
 
-.PHONY: enable-pgstats pg-tune bench-reserve bench-release operation-status
-enable-pgstats pg-tune:
+.PHONY: deploy-cache-schema enable-pgstats pg-tune bench-reserve bench-release operation-status
+deploy-cache-schema enable-pgstats pg-tune:
 	python3 scripts/deploy.py $@ --ref "$$REF" --hosts asia2
 
 bench-reserve:

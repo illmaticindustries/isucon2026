@@ -41,10 +41,22 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 		}
 
 		ctx := c.Request().Context()
-		var secretKeyHash string
-		err = h.DB.GetContext(ctx, &secretKeyHash, `
-   SELECT u.secret_key_hash
+		var metadata struct {
+			SecretKeyHash string    `db:"secret_key_hash"`
+			Generation    int64     `db:"generation"`
+			CreatedAt     time.Time `db:"created_at"`
+			Valid         bool      `db:"valid"`
+		}
+		err = h.DB.GetContext(ctx, &metadata, `
+   SELECT u.secret_key_hash, g.generation, i.created_at,
+     (COALESCE(u.profile_image_id = i.id, false)
+      OR EXISTS (SELECT 1 FROM posts p WHERE p.image_id = i.id AND p.author_id = u.id AND p.deleted_at IS NULL)
+      OR EXISTS (SELECT 1 FROM realmojis r
+        JOIN posts p ON p.id = r.post_id AND p.deleted_at IS NULL
+        JOIN users author ON author.id = p.author_id AND author.status = 'active'
+        WHERE r.image_id = i.id AND r.reactor_id = u.id AND r.replaced_at IS NULL AND r.deleted_at IS NULL)) AS valid
    FROM image_objects i JOIN users u ON u.id = i.owner_user_id
+   CROSS JOIN image_cache_generation g
    WHERE i.id = $1 AND u.status = 'active'
   `, input.ImageID)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -53,7 +65,7 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		key, err := imageSigningKey(secretKeyHash)
+		key, err := imageSigningKey(metadata.SecretKeyHash)
 		if err != nil {
 			return err
 		}
@@ -62,7 +74,18 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 			return NewAPIError(http.StatusForbidden, "image_forbidden")
 		}
 
-		// 削除状態を毎回確認する。即時反映も5秒以内の許容範囲に含まれる。
+		// Signature failures must still be recorded even for an invalid image.
+		if !metadata.Valid {
+			return NewAPIError(http.StatusForbidden, "image_forbidden")
+		}
+		cacheKey := imageBodyKey{ID: input.ImageID, CreatedAt: metadata.CreatedAt, OwnerKey: metadata.SecretKeyHash}
+		if body, ok := imageBodies.get(metadata.Generation, cacheKey); ok {
+			if exp <= time.Now().Unix() {
+				return NewAPIError(http.StatusForbidden, "image_forbidden")
+			}
+			return c.Blob(http.StatusOK, body.MediaType, body.Data)
+		}
+		// On a miss recheck validity and generation in the same snapshot as the data.
 		var object struct {
 			Data      []byte `db:"data"`
 			MediaType string `db:"media_type"`
@@ -70,7 +93,8 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 		err = h.DB.GetContext(ctx, &object, `
    SELECT i.data, i.media_type
    FROM image_objects i JOIN users u ON u.id = i.owner_user_id AND u.status = 'active'
-   WHERE i.id = $1 AND (
+   WHERE i.id = $1 AND i.created_at = $2
+     AND (SELECT generation FROM image_cache_generation) = $3 AND (
      u.profile_image_id = i.id
      OR EXISTS (
        SELECT 1 FROM posts p
@@ -83,7 +107,7 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
        WHERE r.image_id = i.id AND r.reactor_id = u.id AND r.replaced_at IS NULL AND r.deleted_at IS NULL
      )
    )
-  `, input.ImageID)
+  `, input.ImageID, metadata.CreatedAt, metadata.Generation)
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewAPIError(http.StatusForbidden, "image_forbidden")
 		}
@@ -93,6 +117,7 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 		if exp <= time.Now().Unix() {
 			return NewAPIError(http.StatusForbidden, "image_forbidden")
 		}
+		imageBodies.put(metadata.Generation, cacheKey, cachedImageBody{Data: object.Data, MediaType: object.MediaType})
 		return c.Blob(http.StatusOK, object.MediaType, object.Data)
 	}
 }
