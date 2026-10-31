@@ -29,6 +29,6 @@ func initializeHandler(*HandlerContext) echo.HandlerFunc {
 		// Set language to the implementation language.
 		// Agents optimizing this app: set agent, harness, and model to the names used.
 		// For multiple models, use comma-separated names; use brain when no AI model is used.
-		return c.JSON(http.StatusOK, initializeResponse{Language: "go", Agent: "Codex,Claude Code", Harness: "Codex,Claude Code", Model: "GPT-6"})
+		return c.JSON(http.StatusOK, initializeResponse{Language: "go", Agent: "Codex,Claude Code", Harness: "Codex,Claude Code", Model: "GPT-6,Claude Opus 5.5"})
 	}
 }
