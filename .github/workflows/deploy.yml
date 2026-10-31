@@ -1,0 +1,44 @@
+name: Deploy
+on:
+  workflow_dispatch:
+    inputs:
+      hosts:
+        description: Registered app servers (space separated)
+        default: asia1 europe1 america1
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: competition-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: webapp/go/go.mod
+          cache-dependency-path: webapp/go/go.sum
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          test -n "$KEY" && test -n "$KNOWN_HOSTS"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Deploy using the same Makefile as local development
+        env:
+          REF: ${{ github.sha }}
+          HOSTS: ${{ inputs.hosts }}
+          SSH_OPTIONS: -i /home/runner/.ssh/id_deploy -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes
+        run: make preflight && make deploy
+      - name: Remove temporary key
+        if: always()
+        run: rm -f ~/.ssh/id_deploy
