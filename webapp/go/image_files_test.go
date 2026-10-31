@@ -119,6 +119,10 @@ func TestRegionalImageNginx(t *testing.T) {
 		regional := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-Test-Backend", fmt.Sprintf("regional-%d", region))
 			w.Header().Set("X-Test-Method", r.Method)
+			if r.URL.Path == "/api/feeds/friends-of-friends" && r.URL.RawQuery != "beforeScore=12&beforeId=p1" {
+				http.Error(w, "feed cursor lost", 400)
+				return
+			}
 			if r.URL.Path == "/api/users" && r.URL.Query().Get("q") != "coffee" {
 				http.Error(w, "query lost", 400)
 				return
@@ -266,9 +270,14 @@ func TestRegionalImageNginx(t *testing.T) {
 		{http.MethodPatch, "/api/me", false},
 		{http.MethodPost, "/api/me/account-deletion", false},
 		{http.MethodPut, "/api/me/profile-image", false},
-		{http.MethodGet, "/api/posts/me/current", false},
+		{http.MethodGet, "/api/posts/me/current", true},
 		{http.MethodGet, "/api/posting-window/current", false},
-		{http.MethodGet, "/api/feeds/friends", false},
+		{http.MethodGet, "/api/feeds/friends", true},
+		{http.MethodGet, "/api/feeds/friends-of-friends?beforeScore=12&beforeId=p1", true},
+		{http.MethodGet, "/api/feeds/following", true},
+		{http.MethodGet, "/api/feeds/public", true},
+		{http.MethodGet, "/api/feeds/friends-extra", false},
+		{http.MethodGet, "/api/posts/me/current-extra", false},
 		{http.MethodGet, "/api/users/id", false},
 		{http.MethodGet, "/api/relationships/friends", false},
 		{http.MethodPost, "/api/friend-requests-other", false},
