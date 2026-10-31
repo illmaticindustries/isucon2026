@@ -141,6 +141,11 @@ func replaceSessionForLockedUser(ctx context.Context, tx *sqlx.Tx, userID string
 	randomToken := uuid.NewString()
 	tokenHashBytes := sha256.Sum256([]byte(randomToken))
 	tokenHash := hex.EncodeToString(tokenHashBytes[:])
+	// Callers lock the user row (login uses FOR SHARE so relationship changes do
+	// not queue logins); session replacement itself is serialized per user here.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('login-session:' || $1, 0))`, userID); err != nil {
+		return nil, fmt.Errorf("failed to lock sessions: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, `
   UPDATE login_sessions
   SET active = false, invalidated_at = clock_timestamp(), reason = 'replaced'

@@ -3,7 +3,6 @@ package isureal
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"net/http"
 	"time"
 
@@ -34,15 +33,22 @@ func beginRelationshipTx(ctx context.Context, db *sqlx.DB, actor, target string)
 	if err != nil {
 		return nil, err
 	}
-	for _, id := range []string{min(actor, target), max(actor, target)} {
-		var lockedID string
-		if err := tx.GetContext(ctx, &lockedID, `SELECT id FROM users WHERE id=$1 AND status='active' FOR NO KEY UPDATE`, id); err != nil {
-			tx.Rollback()
-			if errors.Is(err, sql.ErrNoRows) {
-				return nil, NewAPIError(http.StatusNotFound, "relationship_not_found")
-			}
-			return nil, err
-		}
+	// Serialize changes of this pair only. FOR SHARE still keeps both users
+	// active against deletion and profile/region updates, but no longer queues
+	// every relationship, RealMoji and login of a popular user behind each other.
+	low, high := min(actor, target), max(actor, target)
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('relationship:' || $1 || ':' || $2, 0))`, low, high); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	var lockedIDs []string
+	if err := tx.SelectContext(ctx, &lockedIDs, `SELECT id FROM users WHERE id IN ($1,$2) AND status='active' ORDER BY id FOR SHARE`, low, high); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if len(lockedIDs) != 2 {
+		tx.Rollback()
+		return nil, NewAPIError(http.StatusNotFound, "relationship_not_found")
 	}
 	return tx, nil
 }
