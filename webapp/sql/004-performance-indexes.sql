@@ -35,3 +35,18 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS login_sessions_active_user
 CREATE INDEX CONCURRENTLY IF NOT EXISTS friend_requests_pending_pair
   ON friend_requests (requester_id, recipient_id) INCLUDE (id)
   WHERE status = 'pending';
+
+-- 画像はJPEGで非圧縮性のため、TOAST圧縮は常に失敗し書き込みごとにCPUを浪費する。
+-- 全方位で実測0/1555件しか圧縮できていなかったため、圧縮の試行を止める (EXTERNAL)。
+-- ストレージ設定はパーティション単位なので親と全パーティションへ適用する。
+DO $$
+DECLARE part text;
+BEGIN
+  ALTER TABLE image_objects ALTER COLUMN data SET STORAGE EXTERNAL;
+  FOR part IN
+    SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid
+    WHERE i.inhparent = 'image_objects'::regclass
+  LOOP
+    EXECUTE format('ALTER TABLE %I ALTER COLUMN data SET STORAGE EXTERNAL', part);
+  END LOOP;
+END $$;
