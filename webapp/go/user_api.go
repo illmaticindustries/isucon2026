@@ -93,22 +93,18 @@ func registerHandler(h *HandlerContext) echo.HandlerFunc {
 		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, input.Username); err != nil {
 			return err
 		}
-		var exists bool
-		if err := tx.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)`, input.Username); err != nil {
-			return err
-		}
-		if exists {
+		// Check after acquiring the lock, in a new READ COMMITTED snapshot.
+		var user User
+		err = tx.GetContext(ctx, &user, `INSERT INTO users (id, username, secret_key_hash, display_name, region,
+ search_username_source, search_display_name_source, search_username_normalized, search_display_name_normalized)
+ SELECT $1, $2::text, $3, $4::text, $5, $2::text, $4::text, $6, $7
+ WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = $2::text)
+ RETURNING id, username, display_name, bio, region, account_type, status`,
+			uuid.NewString(), input.Username, hex.EncodeToString(hash[:]), input.DisplayName, input.Region,
+			normalizeSearchText(input.Username), normalizeSearchText(input.DisplayName))
+		if errors.Is(err, sql.ErrNoRows) {
 			return NewAPIError(http.StatusConflict, "username_taken")
 		}
-		userID := uuid.NewString()
-		if _, err := tx.ExecContext(ctx, `INSERT INTO users (id, username, secret_key_hash, display_name, region,
- search_username_source, search_display_name_source, search_username_normalized, search_display_name_normalized)
- VALUES ($1, $2::text, $3, $4::text, $5, $2::text, $4::text, $6, $7)`,
-			userID, input.Username, hex.EncodeToString(hash[:]), input.DisplayName, input.Region,
-			normalizeSearchText(input.Username), normalizeSearchText(input.DisplayName)); err != nil {
-			return err
-		}
-		user, err := getUser(ctx, tx, userID)
 		if err != nil {
 			return err
 		}
