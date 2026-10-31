@@ -6,11 +6,14 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v5"
 )
+
+const feedScanLimit = 200
 
 type getFeedRequest struct {
 	Feed           string     `param:"feed"`
@@ -69,18 +72,47 @@ func getFeedHandler(h *HandlerContext) echo.HandlerFunc {
 		if ranked {
 			beforePostedAt, beforeID = nil, ""
 		}
-		posts, err := selectPostsWithAuthor(ctx, h.DB, `
+		candidates := make([]PostWithAuthor, 0)
+		if ranked {
+			posts, err := selectPostsWithAuthor(ctx, h.DB, `
+   AND p.author_id <> $1 AND w.ended_at IS NULL
+   ORDER BY p.posted_at DESC, p.id DESC
+  `, viewer.ID)
+			if err != nil {
+				return err
+			}
+			for _, post := range posts {
+				if viewer.canView(post.Post) && matchesFeed(viewer, following, post.Post, input.Feed) {
+					candidates = append(candidates, post)
+				}
+			}
+		} else {
+			cursorAt, cursorID := beforePostedAt, beforeID
+			for len(candidates) < 51 {
+				posts, err := selectPostsWithAuthor(ctx, h.DB, `
    AND p.author_id <> $1 AND w.ended_at IS NULL
    AND ($2::timestamptz IS NULL OR (p.posted_at, p.id) < ($2, $3))
    ORDER BY p.posted_at DESC, p.id DESC
-  `, viewer.ID, beforePostedAt, beforeID)
-		if err != nil {
-			return err
-		}
-		candidates := make([]PostWithAuthor, 0)
-		for _, post := range posts {
-			if viewer.canView(post.Post) && matchesFeed(viewer, following, post.Post, input.Feed) {
-				candidates = append(candidates, post)
+   LIMIT `+strconv.Itoa(feedScanLimit), viewer.ID, cursorAt, cursorID)
+				if err != nil {
+					return err
+				}
+				if len(posts) == 0 {
+					break
+				}
+				for _, post := range posts {
+					if viewer.canView(post.Post) && matchesFeed(viewer, following, post.Post, input.Feed) {
+						candidates = append(candidates, post)
+						if len(candidates) == 51 {
+							break
+						}
+					}
+				}
+				if len(posts) < feedScanLimit {
+					break
+				}
+				at := posts[len(posts)-1].PostedAt
+				cursorAt, cursorID = &at, posts[len(posts)-1].ID
 			}
 		}
 		var scores map[string]int64
