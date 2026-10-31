@@ -33,7 +33,7 @@ def output(args):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('action', choices=['regional-deploy', 'build', 'deploy', 'preflight', 'rollback', 'status', 'logs', 'deploy-indexes', 'verify-indexes', 'nginx-log', 'alp', 'enable-pgstats', 'alp-install', 'nginx-deploy', 'nginx-rotate', 'pgstats-reset'])
+    p.add_argument('action', choices=['regional-deploy', 'build', 'deploy', 'preflight', 'rollback', 'status', 'logs', 'deploy-indexes', 'verify-indexes', 'nginx-log', 'alp', 'enable-pgstats', 'alp-install', 'nginx-deploy', 'nginx-rotate', 'pgstats-reset', 'pg-tune'])
     p.add_argument('--ref', default='HEAD')
     p.add_argument('--hosts', default='asia1 europe1 america1')
     a = p.parse_args()
@@ -46,7 +46,7 @@ def main():
             p.error('competition ended; wait for organizer permission and update this guard explicitly')
     if a.action in ('regional-deploy', 'deploy', 'rollback', 'preflight', 'nginx-deploy', 'nginx-rotate') and 'asia2' in names:
         p.error('application actions cannot target the DB server asia2')
-    if a.action in ('deploy-indexes', 'verify-indexes', 'enable-pgstats', 'pgstats-reset') and names != ['asia2']:
+    if a.action in ('deploy-indexes', 'verify-indexes', 'enable-pgstats', 'pgstats-reset', 'pg-tune') and names != ['asia2']:
         p.error('DB operations require HOSTS=asia2')
     if a.action == 'regional-deploy' and names != ['asia1', 'europe1', 'america1']:
         p.error('regional-deploy requires HOSTS="asia1 europe1 america1" in that order')
@@ -117,6 +117,8 @@ def main():
             archive = work/'source.tar'
             with archive.open('wb') as f:
                 paths = ['etc/nginx'] if a.action == 'nginx-deploy' else ['webapp/go', 'webapp/sql', 'scripts/enable-pgstats.sh']
+                if a.action == 'pg-tune':
+                    paths = ['etc/postgresql/16/main/conf.d/tuning.conf']
                 if a.action == 'regional-deploy':
                     paths.append('etc/nginx')
                 run(['git', '-C', str(ROOT), 'archive', rev, *paths, 'scripts/deploy-remote.sh'], stdout=f)
@@ -133,6 +135,20 @@ def main():
                 return
             if a.action == 'nginx-deploy':
                 deploy_nginx(work, rev)
+                return
+            if a.action == 'pg-tune':
+                payload = work/'postgres.tar'
+                with tarfile.open(payload, 'w') as tar:
+                    tar.add(work/'etc/postgresql/16/main/conf.d/tuning.conf', arcname='postgres/tuning.conf')
+                stage = output(ssh + ['isucon@'+HOSTS['asia2'], 'mktemp -d /home/isucon/.deploy-stage.XXXXXXXX'])
+                if not re.fullmatch(r'/home/isucon/\.deploy-stage\.[A-Za-z0-9]+', stage):
+                    raise RuntimeError('unexpected stage path')
+                try:
+                    remote('asia2', 'cat > ' + stage + '/postgres.tar', input=payload.read_bytes())
+                    remote('asia2', 'bash -s -- postgres ' + stage, input=(work/'scripts/deploy-remote.sh').read_bytes())
+                finally:
+                    remote('asia2', 'rm -rf -- ' + shlex.quote(stage))
+                print('asia2: postgres config ' + rev, flush=True)
                 return
             env = dict(os.environ, GOOS='linux', GOARCH='amd64', CGO_ENABLED='0')
             run(['go', 'test', './...'], cwd=work/'webapp/go')
@@ -159,7 +175,7 @@ def main():
             if a.action == 'regional-deploy':
                 deploy_nginx(work, rev)
 
-    if a.action in ('regional-deploy', 'deploy', 'rollback', 'deploy-indexes', 'enable-pgstats', 'nginx-deploy', 'alp-install'):
+    if a.action in ('regional-deploy', 'deploy', 'rollback', 'deploy-indexes', 'enable-pgstats', 'nginx-deploy', 'alp-install', 'pg-tune'):
         with mutation(f'{a.action} ref={a.ref} hosts={a.hosts}'):
             perform()
     else:

@@ -103,6 +103,53 @@ class DeployTest(unittest.TestCase):
 
     def test_invalid_nginx_config_is_restored(self):
         self.exercise_nginx(fail=True)
+    def exercise_postgres(self, fail=False, previous=None):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            pgconf, state, stage, bins = [root/n for n in ['conf.d', 'state', 'stage', 'bin']]
+            for p in [pgconf, stage/'source/postgres', bins]:
+                p.mkdir(parents=True, exist_ok=True)
+            if previous is not None:
+                (pgconf/'tuning.conf').write_text(previous)
+            (stage/'source/postgres/tuning.conf').write_text('new')
+            with tarfile.open(stage/'postgres.tar', 'w') as tar:
+                tar.add(stage/'source/postgres', arcname='postgres')
+            scripts = {
+                # Drop -u/-o/-g options so the fakes run as the current user.
+                'sudo': '#!/bin/bash\nshift\nif [ "$1" = -u ]; then shift 2; fi\nexec "$@"\n',
+                'install': '#!/bin/bash\nargs=()\nwhile [ $# -gt 0 ]; do case "$1" in -o|-g) shift 2 ;; *) args+=("$1"); shift ;; esac; done\nexec /usr/bin/install "${args[@]}"\n',
+                # Fail the first restart while the new file is installed.
+                'systemctl': '#!/bin/bash\nif [ "$1" = restart ] && [ -f "$PG_FAIL" ] && grep -q new "$PGCONF/tuning.conf"; then exit 1; fi\nexit 0\n',
+                'pg_isready': '#!/bin/bash\nexit 0\n',
+                'psql': '#!/bin/bash\necho "shared_buffers = 131072 8kB"\n',
+                'flock': '#!/bin/bash\nexit 0\n',
+            }
+            for n, text in scripts.items():
+                (bins/n).write_text(text)
+                (bins/n).chmod(0o755)
+            marker = root/'pg-fail'
+            if fail:
+                marker.touch()
+            env = dict(os.environ, PATH=str(bins)+':'+os.environ['PATH'], PG_FAIL=str(marker), PGCONF=str(pgconf))
+            script = (ROOT/'scripts/deploy-remote.sh').read_text().replace('pgconf=/etc/postgresql/16/main/conf.d', 'pgconf='+str(pgconf)).replace('state=/home/isucon/.isureal-deploy', 'state='+str(state))
+            result = subprocess.run(['bash', '-s', '--', 'postgres', str(stage)], input=script, text=True, env=env, capture_output=True)
+            self.assertEqual(result.returncode != 0, fail, result.stderr + result.stdout)
+            conf = pgconf/'tuning.conf'
+            if not fail:
+                self.assertEqual(conf.read_text(), 'new')
+            elif previous is None:
+                self.assertFalse(conf.exists())
+            else:
+                self.assertEqual(conf.read_text(), previous)
+
+    def test_postgres_tuning_applies(self):
+        self.exercise_postgres(previous='old')
+
+    def test_postgres_start_failure_restores_previous_tuning(self):
+        self.exercise_postgres(fail=True, previous='old')
+
+    def test_postgres_start_failure_removes_first_tuning(self):
+        self.exercise_postgres(fail=True)
 
 if __name__ == '__main__':
     unittest.main()

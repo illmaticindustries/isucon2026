@@ -30,6 +30,10 @@ nginxの設定はリポジトリの `etc/nginx/` が正。`make nginx-deploy REF
 
 `make alp-install PORTAL_IDLE=yes` はalp v1.0.22をチェックサム照合のうえ /usr/local/bin/alp に配置する。`make alp` で集計する（クエリ文字列は除外され、パスパラメータは正規化される）。
 
+## PostgreSQL設定
+
+asia2の設定はリポジトリの `etc/postgresql/16/main/conf.d/tuning.conf` が正。`make pg-tune REF=<SHA> PORTAL_IDLE=yes` で共有予約を取得し、既存ファイルをバックアップして配置、`postgresql@16-main` を再起動する（`shared_buffers` 変更のため再起動が必要で、数秒間3台のアプリからDBに接続できない）。起動しない場合は元のファイルに戻して再起動する。成功時は `tuning.conf` 由来の設定値を表示する。バックアップは asia2 の /home/isucon/.isureal-deploy/postgres-backup.*。`fsync`・`synchronous_commit`・`full_page_writes` など永続性に関わる設定は変更しない。
+
 ## CI
 
 PR/mainでGo検証。main上の手動Deployワークフローも同じ `make preflight` と `make deploy` を使用し、自動pushデプロイはしない。GitHubの非公開リポジトリに `DEPLOY_SSH_KEY` と `DEPLOY_KNOWN_HOSTS` のSecretsが必要（値をGitやログに含めない）。手元とCIをまたぐ同時実行も避ける。各ホストのロックはあるが、全3台を一括トランザクションにはしない。

@@ -3,6 +3,7 @@ set -euo pipefail
 base=/home/isucon/webapp
 state=/home/isucon/.isureal-deploy
 nginx=/etc/nginx
+pgconf=/etc/postgresql/16/main/conf.d
 mkdir -p "$state"
 exec 9>"$state/lock"
 flock -n 9 || { echo 'Another deploy is active'; exit 1; }
@@ -91,5 +92,35 @@ nginx)
     sudo -n systemctl reload nginx
     echo "nginx reloaded; previous config in $backup"
     ;;
-*) echo 'Expected deploy, rollback or nginx' >&2; exit 2 ;;
+postgres)
+    stage=$2
+    tar -xf "$stage/postgres.tar" -C "$stage"
+    test -s "$stage/postgres/tuning.conf"
+    pg_ready() {
+        local i
+        for i in {1..30}; do
+            if systemctl is-active --quiet postgresql@16-main && pg_isready -q -h 127.0.0.1; then return 0; fi
+            sleep 1
+        done
+        return 1
+    }
+    backup=$(mktemp -d "$state/postgres-backup.XXXXXXXX")
+    if test -f "$pgconf/tuning.conf"; then cp -p "$pgconf/tuning.conf" "$backup/tuning.conf"; fi
+    sudo -n install -o postgres -g postgres -m 644 "$stage/postgres/tuning.conf" "$pgconf/tuning.conf"
+    # PostgreSQL refuses to start on an invalid setting; put the previous file back and start again.
+    if ! sudo -n systemctl restart postgresql@16-main || ! pg_ready; then
+        if test -f "$backup/tuning.conf"; then
+            sudo -n install -o postgres -g postgres -m 644 "$backup/tuning.conf" "$pgconf/tuning.conf"
+        else
+            sudo -n rm -f "$pgconf/tuning.conf"
+        fi
+        sudo -n systemctl restart postgresql@16-main
+        pg_ready || echo 'ROLLBACK FAILED: PostgreSQL is not ready; operator action required' >&2
+        echo "PostgreSQL did not start with the new settings; restored $backup" >&2
+        exit 1
+    fi
+    sudo -n -u postgres psql -X -At -c "SELECT name || ' = ' || setting || coalesce(' ' || unit, '') FROM pg_settings WHERE sourcefile LIKE '%/tuning.conf' ORDER BY name"
+    echo "PostgreSQL restarted; previous config in $backup"
+    ;;
+*) echo 'Expected deploy, rollback, nginx or postgres' >&2; exit 2 ;;
 esac
