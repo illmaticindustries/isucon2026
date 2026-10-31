@@ -19,6 +19,8 @@ func initializeHandler(h *HandlerContext) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		imageBodies.clear()
 		defer imageBodies.clear()
+		clearImageMeta()
+		defer clearImageMeta()
 		notificationBatches.clear()
 		defer notificationBatches.clear()
 		clearSessionCache()
