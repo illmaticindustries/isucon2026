@@ -207,20 +207,15 @@ func updateMeHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		defer tx.Rollback()
-		if input.DisplayName != nil {
-			if _, err := tx.ExecContext(ctx, `UPDATE users SET display_name = $2, updated_at = clock_timestamp() WHERE id = $1`, session.UserID, *input.DisplayName); err != nil {
-				return err
-			}
-		}
-		if input.Bio != nil {
-			if _, err := tx.ExecContext(ctx, `UPDATE users SET bio = $2, updated_at = clock_timestamp() WHERE id = $1`, session.UserID, *input.Bio); err != nil {
-				return err
-			}
-		}
-		if input.Region != nil {
-			if _, err := tx.ExecContext(ctx, `UPDATE users SET region = $2, updated_at = clock_timestamp() WHERE id = $1`, session.UserID, *input.Region); err != nil {
-				return err
-			}
+		if _, err := tx.ExecContext(ctx, `
+   UPDATE users SET
+     display_name = COALESCE($2, display_name),
+     bio = COALESCE($3, bio),
+     region = COALESCE($4, region),
+     updated_at = clock_timestamp()
+   WHERE id = $1
+  `, session.UserID, input.DisplayName, input.Bio, input.Region); err != nil {
+			return err
 		}
 		user, err := getUser(ctx, tx, session.UserID)
 		if errors.Is(err, sql.ErrNoRows) {

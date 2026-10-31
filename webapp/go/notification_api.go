@@ -34,16 +34,46 @@ func getNotificationsHandler(h *HandlerContext) echo.HandlerFunc {
 		if err := controller.Flush(); err != nil {
 			return nil
 		}
-		ticker := time.NewTicker(1 * time.Second)
+		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
 		for {
-			var notification getNotificationsResponse
-			err := h.DB.GetContext(ctx, &notification, `
-    SELECT n.id, n.posting_window_id, w.region, n.created_at
-    FROM notifications n JOIN posting_windows w ON w.id = n.posting_window_id
-    WHERE n.user_id = $1 AND n.created_at > $2 AND w.ended_at IS NULL AND w.region = $3
-    ORDER BY n.created_at, n.id LIMIT 1
-   `, userID, connectedAt, session.Region)
+			// Return the active recipient even when no notification is ready,
+			// so retirement/region changes still terminate the stream promptly.
+			var row struct {
+				Region       string         `db:"region"`
+				ID           sql.NullString `db:"id"`
+				WindowID     sql.NullString `db:"posting_window_id"`
+				WindowRegion sql.NullString `db:"window_region"`
+				CreatedAt    sql.NullTime   `db:"created_at"`
+			}
+			err := h.DB.GetContext(ctx, &row, `
+                SELECT u.region, n.id, n.posting_window_id, n.window_region, n.created_at
+                FROM users u
+                LEFT JOIN LATERAL (
+                    SELECT n.id, n.posting_window_id, w.region AS window_region, n.created_at
+                    FROM notifications n JOIN posting_windows w ON w.id = n.posting_window_id
+                    WHERE n.user_id = u.id AND n.created_at > $2 AND w.ended_at IS NULL
+                    ORDER BY n.created_at, n.id LIMIT 1
+                ) n ON true
+                WHERE u.id = $1 AND u.status = 'active'
+            `, userID, connectedAt)
+			if err != nil {
+				if !errors.Is(err, sql.ErrNoRows) && ctx.Err() == nil {
+					c.Logger().Error("failed to get notification recipient", "error", err)
+				}
+				return nil
+			}
+			if row.Region != session.Region {
+				return nil
+			}
+			notification := getNotificationsResponse{
+				ID: row.ID.String, PostingWindowID: row.WindowID.String,
+				Region: row.WindowRegion.String, CreatedAt: row.CreatedAt.Time,
+			}
+			if !row.ID.Valid {
+				err = sql.ErrNoRows
+			}
+
 			if err == nil {
 				data, err := json.Marshal(notification)
 				if err != nil {
