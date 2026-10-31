@@ -62,28 +62,32 @@ func searchUsersHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		query := normalizeSearchText(input.Q)
-		// Use one ordered query for a consistent snapshot. Repeating LIMIT/OFFSET
-		// or keyset queries is costly for selective Unicode searches, which may
-		// have to inspect the entire active-user set before finding 51 matches.
-		rows, err := h.DB.QueryxContext(ctx, `SELECT `+strings.Join(userColumns, ", ")+` FROM users WHERE status='active' AND id<>$1 AND ($2='' OR (username,id)>($2,$3)) ORDER BY username, id`, viewer, input.BeforeUsername, input.BeforeID)
+		// Match on narrow rows and stop at 51 matches; decoding every column of every
+		// active user dominated asia1 CPU. Both queries share one snapshot.
+		tx, err := h.DB.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		rows, err := tx.QueryContext(ctx, `SELECT id, username, display_name FROM users WHERE status='active' AND id<>$1 AND ($2='' OR (username,id)>($2,$3)) ORDER BY username, id`, viewer, input.BeforeUsername, input.BeforeID)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
-		users := make([]User, 0, 51)
+		ids := make([]string, 0, 51)
 		for rows.Next() {
-			var user User
-			if err := rows.StructScan(&user); err != nil {
+			var id, username, displayName string
+			if err := rows.Scan(&id, &username, &displayName); err != nil {
 				return err
 			}
-			if blocked[user.ID] {
+			if blocked[id] {
 				continue
 			}
-			if !strings.Contains(normalizeSearchText(user.Username), query) && !strings.Contains(normalizeSearchText(user.DisplayName), query) {
+			if !strings.Contains(normalizeSearchText(username), query) && !strings.Contains(normalizeSearchText(displayName), query) {
 				continue
 			}
-			users = append(users, user)
-			if len(users) == 51 {
+			ids = append(ids, id)
+			if len(ids) == 51 {
 				break
 			}
 		}
@@ -91,6 +95,25 @@ func searchUsersHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		if err := rows.Err(); err != nil {
+			return err
+		}
+		users := make([]User, 0, len(ids))
+		if len(ids) > 0 {
+			var fetched []User
+			if err := tx.SelectContext(ctx, &fetched, `SELECT `+strings.Join(userColumns, ", ")+` FROM users WHERE id = ANY($1)`, ids); err != nil {
+				return err
+			}
+			byID := make(map[string]User, len(fetched))
+			for _, user := range fetched {
+				byID[user.ID] = user
+			}
+			for _, id := range ids {
+				if user, ok := byID[id]; ok {
+					users = append(users, user)
+				}
+			}
+		}
+		if err := tx.Commit(); err != nil {
 			return err
 		}
 		// Release the database connection before computing response signatures.
