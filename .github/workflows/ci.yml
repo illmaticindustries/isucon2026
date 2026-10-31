@@ -39,7 +39,7 @@ jobs:
       - name: Build Linux application
         id: build
         background: true
-        run: go build -trimpath -o /tmp/isureal ./cmd/isureal
+        run: go build -o /tmp/isureal ./cmd/isureal
         env:
           GOOS: linux
           GOARCH: amd64
