@@ -113,7 +113,8 @@ func createPostHandler(h *HandlerContext) echo.HandlerFunc {
 		}
 		// Lock just the open window, so it cannot close during insertion.
 		// The slot belongs to a local date even if the author changed regions.
-		err = tx.GetContext(ctx, &window, `
+		loadWindow := func() error {
+			return tx.GetContext(ctx, &window, `
             SELECT w.id, w.starts_at, w.on_time_deadline, slots.active, slots.deleted
             FROM posting_windows w
             CROSS JOIN LATERAL (
@@ -123,6 +124,14 @@ func createPostHandler(h *HandlerContext) echo.HandlerFunc {
                 WHERE p.author_id = $1 AND prior.local_date = w.local_date
             ) slots
             WHERE w.region = $2 AND w.ended_at IS NULL FOR SHARE OF w`, userID, user.Region)
+		}
+		err = loadWindow()
+		if errors.Is(err, sql.ErrNoRows) {
+			// A window switch that committed while we waited on the author lock
+			// is invisible in the first statement's snapshot. Re-read with a new
+			// snapshot to see the new window, like the reference implementation.
+			err = loadWindow()
+		}
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewAPIError(http.StatusConflict, "post_slot_unavailable")
 		}
