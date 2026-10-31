@@ -126,18 +126,9 @@ func loadViewerContext(ctx context.Context, db sqlx.QueryerContext, viewerID str
     FROM block_relations b WHERE b.blocker_id = $1 OR b.blocked_id = $1
   ),
   friends_of_friends AS (
-    -- Probe both directional indexes for each friend instead of scanning the
-    -- whole graph for OR-ed subplans. An edge between two direct friends is
-    -- visited twice, so deduplicate before counting mutual connections.
-    SELECT DISTINCT edge.user_low_id, edge.user_high_id
-    FROM friends friend
-    CROSS JOIN LATERAL (
-      SELECT f.user_low_id, f.user_high_id
-      FROM friendships f WHERE f.user_low_id = friend.id
-      UNION ALL
-      SELECT f.user_low_id, f.user_high_id
-      FROM friendships f WHERE f.user_high_id = friend.id
-    ) edge
+    SELECT f.user_low_id, f.user_high_id
+    FROM friendships f
+    WHERE f.user_low_id IN (SELECT id FROM friends) OR f.user_high_id IN (SELECT id FROM friends)
   )
   SELECT me.id, me.username, me.secret_key_hash, me.display_name, me.bio, me.profile_image_id,
          me.region, me.account_type, me.status,
