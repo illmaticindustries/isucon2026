@@ -42,8 +42,9 @@ PR/mainでGo検証。main上の手動Deployワークフローも同じ `make pre
 
 1. ポータルの未終了ジョブがないことを確認する。
 2. `make bench-reserve PORTAL_IDLE=yes BENCH_NOTE="今回の比較対象など"` を実行する。予約に失敗したらEnqueueしない。
-   予約取得後、asia1・europe1・america1のnginxアクセスログを `access.log.<UTC時刻>` へ退避して `nginx -s reopen` する（削除しない）。以後の `make alp` はこのベンチ分だけを集計する。ローテートに失敗した場合は予約を残して停止するので、各ホストを確認してから解除する。
+   予約取得後、asia1・europe1・america1のnginxアクセスログを `access.log.<UTC時刻>` へ退避して `nginx -s reopen` する（削除しない）。あわせてasia2の `pg_stat_statements` をリセットする（未導入ならスキップ）。以後の `make alp` と `make measure` はこのベンチ分だけを集計する。ローテートに失敗した場合は予約を残して停止するので、各ホストを確認してから解除する。
 3. 予約成功時のトークンを控え、ポータルで1回Enqueueし、ジョブIDを記録する。
+   Enqueue直後に `make measure`（既定60秒、`MEASURE_SECONDS` で変更）を実行する。負荷中のtop（4台）とpprof（アプリ3台）、終了後のalp・nginxステータス内訳・アプリのエラー・`pg_stat_statements` 上位を `measure/<日時>/` に保存する（Git管理外）。読み取りのみで、プロファイルは各アプリサーバの `~/pprof/` に残る。
 4. ジョブがFINISHEDまたはFAILになり、他の未終了ジョブもないことを確認する。
 5. `make bench-release PORTAL_IDLE=yes OPERATION_TOKEN=<発行されたトークン>` で解除する。Enqueueを取りやめた場合も、未終了ジョブがないことを確認して解除する。
 
