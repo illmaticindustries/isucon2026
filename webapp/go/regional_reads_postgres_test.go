@@ -6,19 +6,74 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v5"
 )
 
-// A writer and two independent regional app instances share ONLY PostgreSQL.
-// Hold the reader's only DB connection while checking its warm responses.
+// Run the real HTTP writer in a different OS process: it cannot directly
+// clear the reader's maps, even accidentally.
+func TestRegionalWriterProcess(t *testing.T) {
+	schema := os.Getenv("ISUREAL_TEST_WRITER_SCHEMA")
+	if schema == "" {
+		t.Skip("child process of the regional integration test")
+	}
+	cfg, err := pgx.ParseConfig(os.Getenv("ISUREAL_TEST_DB_DSN"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.RuntimeParams["search_path"] = schema
+	db := sqlx.NewDb(stdlib.OpenDB(*cfg), "pgx")
+	defer db.Close()
+	file := os.NewFile(3, "writer-listener")
+	defer file.Close()
+	listener, err := net.FileListener(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Fatal(http.Serve(listener, NewServerWithDB(&Config{Region: "asia", LogLevel: "error"}, db)))
+}
+
+func regionalWriter(t *testing.T, db *sqlx.DB) string {
+	t.Helper()
+	var schema string
+	if err := db.Get(&schema, "SELECT current_schema()"); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	file, err := ln.File()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRegionalWriterProcess$")
+	cmd.ExtraFiles = []*os.File{file}
+	cmd.Env = append(os.Environ(), "ISUREAL_TEST_WRITER_SCHEMA="+schema)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	return "http://" + ln.Addr().String()
+}
+
+// The two readers have separate authorization caches and image directories.
+// Hold their only DB connection while checking warm responses.
 func TestRegionalReadsAfterCrossRegionWrites(t *testing.T) {
 	db := isolatedWriteTestDB(t)
 	for _, name := range []string{"001-schema.sql", "010-regional-read-leases.sql", "010-regional-read-leases.sql"} {
@@ -42,7 +97,24 @@ func TestRegionalReadsAfterCrossRegionWrites(t *testing.T) {
 	}
 	connect("america")
 	connect("europe")
-	asia := NewServerWithDB(&Config{Region: "asia", LogLevel: "error"}, db)
+	asia := regionalWriter(t, db)
+	writeBlock := func(method, reg string) {
+		t.Helper()
+		req, err := http.NewRequest(method, asia+"/api/blocks/"+reg, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer token-asia")
+		client := http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("%s block %s: HTTP %d", method, reg, resp.StatusCode)
+		}
+	}
 	regions := map[string]*echo.Echo{}
 	roots := map[string]string{}
 	for _, reg := range []string{"europe", "america"} {
@@ -124,15 +196,16 @@ func TestRegionalReadsAfterCrossRegionWrites(t *testing.T) {
 	}
 	for _, reg := range []string{"europe", "america"} {
 		checkFeed(reg, 1, 3*time.Second)
+		hits := regionalReadCounts.feedHits.Load()
+		checkFeed(reg, 1, time.Second)
+		if regionalReadCounts.feedHits.Load() != hits+1 {
+			t.Fatal("pre-block request did not use a warm feed", reg)
+		}
 		// Exercise the public HTTP writer in the other region. No sleep or
 		// replication polling is allowed between its 204 and this read.
-		if r := request(asia, "PUT", "/api/blocks/"+reg, "asia", 5*time.Second); r.Code != http.StatusNoContent {
-			t.Fatalf("block %s: %d %s", reg, r.Code, r.Body.String())
-		}
+		writeBlock("PUT", reg)
 		checkFeed(reg, 0, 3*time.Second)
-		if r := request(asia, "DELETE", "/api/blocks/"+reg, "asia", 5*time.Second); r.Code != 204 {
-			t.Fatalf("unblock: %d", r.Code)
-		}
+		writeBlock("DELETE", reg)
 		checkFeed(reg, 0, 3*time.Second) // unblock alone does not restore friendship
 		connect(reg)
 		checkFeed(reg, 1, 3*time.Second)
