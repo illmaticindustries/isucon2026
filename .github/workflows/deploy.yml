@@ -26,6 +26,8 @@ jobs:
         with:
           fetch-depth: 0
       - uses: actions/setup-go@v5
+        id: toolchain
+        background: true
         with:
           go-version-file: webapp/go/go.mod
           cache-dependency-path: webapp/go/go.sum
@@ -39,6 +41,7 @@ jobs:
           printf '%s\n' "$KEY" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - wait: toolchain
       - name: Deploy using the same Makefile as local development
         env:
           PORTAL_IDLE: ${{ inputs.portal_idle }}
