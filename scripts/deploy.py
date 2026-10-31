@@ -33,7 +33,7 @@ def output(args):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('action', choices=['build', 'deploy', 'preflight', 'rollback', 'status', 'logs', 'deploy-indexes', 'verify-indexes', 'nginx-log', 'alp', 'enable-pgstats', 'alp-install', 'nginx-deploy', 'nginx-rotate'])
+    p.add_argument('action', choices=['build', 'deploy', 'preflight', 'rollback', 'status', 'logs', 'deploy-indexes', 'verify-indexes', 'nginx-log', 'alp', 'enable-pgstats', 'alp-install', 'nginx-deploy', 'nginx-rotate', 'pgstats-reset'])
     p.add_argument('--ref', default='HEAD')
     p.add_argument('--hosts', default='asia1 europe1 america1')
     a = p.parse_args()
@@ -46,7 +46,7 @@ def main():
             p.error('competition ended; wait for organizer permission and update this guard explicitly')
     if a.action in ('deploy', 'rollback', 'preflight', 'nginx-deploy', 'nginx-rotate') and 'asia2' in names:
         p.error('application actions cannot target the DB server asia2')
-    if a.action in ('deploy-indexes', 'verify-indexes', 'enable-pgstats') and names != ['asia2']:
+    if a.action in ('deploy-indexes', 'verify-indexes', 'enable-pgstats', 'pgstats-reset') and names != ['asia2']:
         p.error('DB operations require HOSTS=asia2')
     ssh = ['ssh', *shlex.split(os.environ.get('SSH_OPTIONS', '-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes'))]
     def remote(name, command, **kwargs):
@@ -74,6 +74,11 @@ def main():
             for n in names:
                 print('=== ' + n, flush=True)
                 remote(n, 'cd /var/log/nginx && if sudo -n test -e access.log; then sudo -n mv access.log ' + rotated + '; fi && sudo -n nginx -s reopen && echo "previous log: /var/log/nginx/' + rotated + '"')
+            return
+        # Called by bench-reserve; skipped until enable-pgstats has been applied.
+        if a.action == 'pgstats-reset':
+            remote('asia2', 'export LC_ALL=C.UTF-8; . /home/isucon/env.sh && { sudo -n -u postgres psql -X -At -d "$ISUREAL_DB_NAME" -c "SELECT pg_stat_statements_reset()" >/dev/null'
+                            ' && echo "pg_stat_statements reset" || echo "pg_stat_statements unavailable; skipped"; }')
             return
         if a.action == 'alp-install':
             with urllib.request.urlopen(ALP_URL, timeout=30) as r:

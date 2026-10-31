@@ -42,3 +42,6 @@
 
 # Python tooling
 __pycache__/
+
+# benchmark measurements (make measure)
+/measure/
