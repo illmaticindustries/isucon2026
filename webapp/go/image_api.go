@@ -97,9 +97,6 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 			return serveFile()
 		}
 		if body, ok := imageBodies.get(metadata.Generation, cacheKey); ok {
-			if fileKey != "" && h.ImageFiles.put(fileKey, metadata.Generation, body.Data) {
-				return serveFile()
-			}
 			if exp <= time.Now().Unix() {
 				return NewAPIError(http.StatusForbidden, "image_forbidden")
 			}

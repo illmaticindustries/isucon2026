@@ -96,8 +96,11 @@ func createPostHandler(h *HandlerContext) echo.HandlerFunc {
 		// Acquire the author lock in its own statement. A writer that waited
 		// for another post must check the slot using a newer READ COMMITTED snapshot.
 		var user User
-		if err := tx.GetContext(ctx, &user, `SELECT `+strings.Join(userColumns, ", ")+`
-            FROM users WHERE id=$1 AND status='active' FOR NO KEY UPDATE`, userID); err != nil {
+		if err := tx.GetContext(ctx, &user, `WITH slot AS MATERIALIZED (
+                SELECT pg_advisory_xact_lock(hashtextextended('post-slot:' || $1,0))
+            )
+            SELECT `+strings.Join(userColumns, ", ")+`
+            FROM slot CROSS JOIN users WHERE id=$1 AND status='active' FOR SHARE OF users`, userID); err != nil {
 			return err
 		}
 		if err := user.setImageKey(); err != nil {
@@ -161,7 +164,9 @@ func createPostHandler(h *HandlerContext) echo.HandlerFunc {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
-		h.ImageFiles.warmJPEG(insertedImage{CreatedAt: stored.PostedAt, Generation: stored.Generation}, stored.ImageID, imageData)
+		// The image is durable in PostgreSQL. Seed the bounded read cache so
+		// the client does not wait for a second durable write before posting.
+		imageBodies.put(stored.Generation, imageBodyKey{ID: stored.ImageID, CreatedAt: stored.PostedAt, OwnerKey: user.SecretKeyHash}, cachedImageBody{Data: imageData, MediaType: "image/jpeg"})
 		return c.JSON(http.StatusCreated, newPostResponse(stored.Post, user))
 	}
 }
