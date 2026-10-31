@@ -60,7 +60,7 @@ def ensure_app_schema(work, remote):
     before activating any application host. Older REFs need no new tables.
     """
     command = '. /home/isucon/env.sh; export PGPASSWORD="$ISUREAL_DB_PASSWORD"; exec psql -X --no-password -v ON_ERROR_STOP=1 -h "$ISUREAL_DB_HOST" -p "$ISUREAL_DB_PORT" -U "$ISUREAL_DB_USER" -d "$ISUREAL_DB_NAME"'
-    for name in ('005-image-cache.sql', '006-notification-batches.sql', '007-user-search.sql'):
+    for name in ('005-image-cache.sql', '006-notification-batches.sql', '007-user-search.sql', '008-image-object-index.sql'):
         path = work / 'webapp/sql' / name
         if path.exists():
             print('asia2: required application schema ' + name, flush=True)
