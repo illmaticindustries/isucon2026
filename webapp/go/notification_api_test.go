@@ -88,8 +88,10 @@ func TestNotificationRecipientLifecycle(t *testing.T) {
 			if ctx.Err() != nil {
 				t.Fatal("stream failed to close when recipient became inactive")
 			}
+			// A moved recipient keeps its subscription and is still served, so
+			// the stream must not terminate before the pending event is sent.
 			sent := strings.Contains(rec.Body.String(), `"id":"n1"`)
-			if sent != (scenario == "active") {
+			if sent != (scenario == "active" || scenario == "moved") {
 				t.Fatalf("unexpected event: %s", rec.Body.String())
 			}
 		})

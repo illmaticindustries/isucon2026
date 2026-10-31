@@ -38,8 +38,8 @@ func getNotificationsHandler(h *HandlerContext) echo.HandlerFunc {
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
 		for {
-			// Return the active recipient even when no notification is ready,
-			// so retirement/region changes still terminate the stream promptly.
+			// Return the active recipient even when no notification is ready so
+			// retirement still terminates the stream promptly (the row vanishes).
 			row, err := polls.read(ctx, h.DB, userID, connectedAt)
 			if err != nil {
 				if !errors.Is(err, sql.ErrNoRows) && ctx.Err() == nil {
@@ -47,9 +47,12 @@ func getNotificationsHandler(h *HandlerContext) echo.HandlerFunc {
 				}
 				return nil
 			}
-			if row.Region != session.Region {
-				return nil
-			}
+			// A region move must not drop the subscription. Keep this connection
+			// and follow the user's current region: the window that opens after
+			// the move is delivered here because createdAt > connectedAt, while a
+			// client that reconnected after the window opened could no longer
+			// receive it. Retirement still closes because the row disappears.
+			session.Region = row.Region
 			notification := getNotificationsResponse{
 				ID: row.ID.String, PostingWindowID: row.WindowID.String,
 				Region: row.WindowRegion.String, CreatedAt: row.CreatedAt.Time,

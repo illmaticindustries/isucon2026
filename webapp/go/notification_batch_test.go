@@ -105,7 +105,7 @@ func TestPersistedNotificationRecipientIdentity(t *testing.T) {
 }
 func TestNotificationBatchLifecycle(t *testing.T) {
 	expected := map[string]string{
-		"batch-active": "n-batch", "batch-second-window": "n-batch", "batch-other-region": "n-batch", "batch-inactive": "", "batch-moved": "",
+		"batch-active": "n-batch", "batch-second-window": "n-batch", "batch-other-region": "n-batch", "batch-inactive": "", "batch-moved": "n-batch",
 		"batch-late-recipient": "", "batch-ended-window": "", "batch-before-connect": "",
 		"batch-old-first": "n-old", "batch-new-first": "n-batch", "batch-corrupt": "",
 	}
