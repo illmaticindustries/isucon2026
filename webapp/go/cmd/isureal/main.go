@@ -33,7 +33,13 @@ func main() {
 	for address, region := range listeners {
 		regionalConfig := *config
 		regionalConfig.Region = region
-		server := isureal.NewServerWithDB(&regionalConfig, db)
+		listenerDB := db
+		if region != config.Region {
+			regionalConfig.Forwarded = true
+			listenerDB = isureal.OpenForwardedDatabase(config)
+			defer listenerDB.Close()
+		}
+		server := isureal.NewServerWithDB(&regionalConfig, listenerDB)
 		startConfig := echo.StartConfig{
 			Address: address,
 			BeforeServeFunc: func(s *http.Server) error {

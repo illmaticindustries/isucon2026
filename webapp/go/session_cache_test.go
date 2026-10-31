@@ -1,40 +1,16 @@
 package isureal
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v5"
 )
-
-func TestSessionCacheableRoutePatterns(t *testing.T) {
-	cases := []struct {
-		method  string
-		pattern string
-		want    bool
-	}{
-		{"GET", "/api/users", false},
-		{"POST", "/api/posts", false},
-		{"POST", "/api/friend-requests", false},
-		{"POST", "/api/friend-requests/:requestId/:action", false},
-		// Every other route is served in-region and may be cached.
-		{"GET", "/api/users/:userId", true},
-		{"POST", "/api/posts/:postId/comments", true},
-		{"PATCH", "/api/me", true},
-		{"GET", "/api/feeds/:feed", true},
-		{"PUT", "/api/me/profile-image", true},
-	}
-	e := echo.New()
-	for _, tc := range cases {
-		req := httptest.NewRequest(tc.method, "/", nil)
-		c := e.NewContext(req, httptest.NewRecorder())
-		c.SetPath(tc.pattern)
-		if got := sessionCacheable(c); got != tc.want {
-			t.Errorf("%s %s: got %v want %v", tc.method, tc.pattern, got, tc.want)
-		}
-	}
-}
 
 func TestSessionCacheStoreLoadAndInvalidate(t *testing.T) {
 	clearSessionCache()
@@ -78,5 +54,33 @@ func TestSessionCacheExpiry(t *testing.T) {
 	})
 	if _, ok := loadCachedSession("expired"); ok {
 		t.Fatal("expired entry served")
+	}
+}
+
+// A forwarded listener must read the database even when this process holds a
+// cached session: the region's own process may have logged that token out.
+func TestForwardedListenerBypassesSessionCache(t *testing.T) {
+	clearSessionCache()
+	defer clearSessionCache()
+	db, err := sqlx.Open("pgx", "postgres://user:pass@127.0.0.1:1/unreachable?connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	token := "stale-token"
+	hash := sha256.Sum256([]byte(token))
+	tokenHash := hex.EncodeToString(hash[:])
+	storeCachedSession(tokenHash, &Session{UserID: "u1", TokenHash: tokenHash, Region: "europe"})
+
+	newContext := func() *echo.Context {
+		req := httptest.NewRequest(http.MethodPost, "/api/posts/p1/comments", nil)
+		req.Header.Set(echo.HeaderAuthorization, "Bearer "+token)
+		return echo.New().NewContext(req, httptest.NewRecorder())
+	}
+	if session, err := getSessionFromHeader(newContext(), db, false); err != nil || session == nil || session.UserID != "u1" {
+		t.Fatalf("own-region listener: session %+v err %v, want cached session", session, err)
+	}
+	if session, err := getSessionFromHeader(newContext(), db, true); err == nil {
+		t.Fatalf("forwarded listener served %+v from the cache", session)
 	}
 }

@@ -32,7 +32,7 @@ func GetSession(c *echo.Context) *Session {
 	return sess
 }
 
-func getSessionFromHeader(c *echo.Context, db *sqlx.DB) (*Session, error) {
+func getSessionFromHeader(c *echo.Context, db *sqlx.DB, forwarded bool) (*Session, error) {
 	authHeader := c.Request().Header.Get(echo.HeaderAuthorization)
 	if authHeader == "" {
 		return nil, nil
@@ -46,10 +46,12 @@ func getSessionFromHeader(c *echo.Context, db *sqlx.DB) (*Session, error) {
 
 	tokenHashBytes := sha256.Sum256([]byte(token))
 	tokenHash := hex.EncodeToString(tokenHashBytes[:])
-	// Cache session reads for every in-region route. Routes nginx forwards to
-	// another region's listener still read the database, so a logout, deletion
-	// or region change made here is observed there within the same request.
-	cacheable := sessionCacheable(c)
+	// Cache session reads on every route of the region's own listener, and
+	// never on a forwarded listener: logins, logouts and deletions run in the
+	// region's own process, which is the only one that invalidates its cache
+	// immediately. This keeps "use the token after logout is 401" true on every
+	// route, forwarded or not, without listing the routes nginx forwards.
+	cacheable := !forwarded
 	if cacheable {
 		if session, ok := loadCachedSession(tokenHash); ok {
 			return session, nil
@@ -77,7 +79,7 @@ func getSessionFromHeader(c *echo.Context, db *sqlx.DB) (*Session, error) {
 func SessionMiddleware(handlerContext *HandlerContext, authRequired bool) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
-			session, err := getSessionFromHeader(c, handlerContext.DB)
+			session, err := getSessionFromHeader(c, handlerContext.DB, handlerContext.Config.Forwarded)
 			if err != nil {
 				return err
 			}
