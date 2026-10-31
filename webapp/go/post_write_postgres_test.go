@@ -56,6 +56,9 @@ func isolatedWriteTestDB(t *testing.T) *sqlx.DB {
 // same author's lock. Using a shared, isolated test schema exercises real row
 // locks, the partitioned image table, and the HTTP handler together.
 func TestPostSlotAfterLockWait(t *testing.T) {
+	previousCache := imageBodies
+	imageBodies = newImageBodyCache(128<<20, 4096)
+	t.Cleanup(func() { imageBodies = previousCache })
 	db := isolatedWriteTestDB(t)
 	for _, file := range []string{"001-schema.sql", "005-image-cache.sql"} {
 		contents, err := os.ReadFile(filepath.Join("../sql", file))
@@ -153,8 +156,9 @@ func TestPostSlotAfterLockWait(t *testing.T) {
 		created.Location.Latitude == nil || *created.Location.Latitude != 35.123 || !strings.Contains(created.ImageURL, "/api/images/"+stored.ID+"?") {
 		t.Fatal("response, partition key or image bytes differ from stored values")
 	}
-	if !files.exists(fileImageKey(stored.ID, stored.CreatedAt, "image/jpeg", 1)) {
-		t.Fatal("committed file was not warmed")
+	cached, ok := imageBodies.get(1, imageBodyKey{ID: stored.ID, CreatedAt: stored.CreatedAt, OwnerKey: strings.Repeat("12", 32)})
+	if !ok || !bytes.Equal(cached.Data, photo.Bytes()) {
+		t.Fatal("committed photo was not available in the read cache")
 	}
 	db.MustExec("UPDATE users SET region='europe' WHERE id='author'")
 	if rec := post(); rec.Code != 409 {

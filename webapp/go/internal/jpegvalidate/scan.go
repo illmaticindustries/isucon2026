@@ -330,6 +330,10 @@ func (d *decoder) validateSequentialBlock(dc, ac *huffman) error {
 		return nil
 	}
 	for zig := int32(1); zig < blockSize; zig++ {
+		zig = d.skipShortAC(ac, zig)
+		if zig == blockSize {
+			break
+		}
 		value, err := d.decodeHuffman(ac)
 		if err != nil {
 			return err
@@ -359,6 +363,47 @@ func (d *decoder) validateSequentialBlock(dc, ac *huffman) error {
 		}
 	}
 	return nil
+}
+
+// skipShortAC consumes complete nonzero coefficients described by the short
+// Huffman table. Keep the reservoir local until the next marker, long code,
+// zero-run or block boundary requires the ordinary decoder. A lookahead byte
+// is committed only when the corresponding symbol is consumed.
+func (d *decoder) skipShortAC(h *huffman, zig int32) int32 {
+	a, n, i := d.bits.a, d.bits.n, d.bytes.i
+	for zig < blockSize && i+2 <= d.bytes.j {
+		bits, count, next := a, n, i
+		if count < lutSize {
+			b := d.bytes.buf[next]
+			if b == 0xff {
+				break
+			}
+			bits, count, next = bits<<8|uint32(b), count+8, next+1
+		}
+		entry := h.lut[(bits>>uint(count-lutSize))&255]
+		symbol := uint8(entry >> 8)
+		size := int32(symbol & 15)
+		end := zig + int32(symbol>>4)
+		if size == 0 || end >= blockSize {
+			break
+		}
+		used := int32(uint8(entry)) - 1 + size
+		if count < used {
+			b := d.bytes.buf[next]
+			if b == 0xff || count+8 < used {
+				break
+			}
+			bits, count, next = bits<<8|uint32(b), count+8, next+1
+		}
+		a, n, i, zig = bits, count-used, next, end+1
+	}
+	if i != d.bytes.i {
+		d.bytes.i = i
+		d.bytes.nUnreadable = 1
+	}
+	d.bits.a, d.bits.n = a, n
+	d.bits.m = (uint32(1) << uint(n)) >> 1
+	return zig
 }
 
 func (d *decoder) skipAmplitude(n uint8) error {
