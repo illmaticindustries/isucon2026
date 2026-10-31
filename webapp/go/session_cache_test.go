@@ -73,7 +73,7 @@ func TestForwardedListenerBypassesSessionCache(t *testing.T) {
 	storeCachedSession(tokenHash, &Session{UserID: "u1", TokenHash: tokenHash, Region: "europe"})
 
 	newContext := func() *echo.Context {
-		req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+		req := httptest.NewRequest(http.MethodPost, "/api/posts/p1/comments", nil)
 		req.Header.Set(echo.HeaderAuthorization, "Bearer "+token)
 		return echo.New().NewContext(req, httptest.NewRecorder())
 	}

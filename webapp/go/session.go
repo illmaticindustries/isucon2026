@@ -46,11 +46,12 @@ func getSessionFromHeader(c *echo.Context, db *sqlx.DB, forwarded bool) (*Sessio
 
 	tokenHashBytes := sha256.Sum256([]byte(token))
 	tokenHash := hex.EncodeToString(tokenHashBytes[:])
-	// Cache session reads for GET requests only, and never on a forwarded
-	// listener: logins, logouts and deletions run in the region's own process,
-	// which is the only one that invalidates its cache immediately. This keeps
-	// "use the token after logout is 401" true on every route, forwarded or not.
-	cacheable := c.Request().Method == http.MethodGet && !forwarded
+	// Cache session reads on every route of the region's own listener, and
+	// never on a forwarded listener: logins, logouts and deletions run in the
+	// region's own process, which is the only one that invalidates its cache
+	// immediately. This keeps "use the token after logout is 401" true on every
+	// route, forwarded or not, without listing the routes nginx forwards.
+	cacheable := !forwarded
 	if cacheable {
 		if session, ok := loadCachedSession(tokenHash); ok {
 			return session, nil

@@ -16,16 +16,40 @@ jobs:
       ISUREAL_TEST_DB_DSN: ''
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        id: toolchain
+      - name: Read pinned Go version
+        id: go-version
+        run: |
+          version=$(awk '$1 == "go" {print $2; exit}' webapp/go/go.mod)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Cache Go toolchain
+        id: toolchain-cache
         background: true
+        uses: actions/cache@v4
         with:
-          go-version-file: webapp/go/go.mod
-          cache-dependency-path: webapp/go/go.sum
+          path: ${{ runner.tool_cache }}/go/${{ steps.go-version.outputs.version }}
+          key: go-toolchain-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-version.outputs.version }}
+      - name: Cache Go compilation and modules
+        id: build-cache
+        background: true
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          # Save changed sources after success, even when dependencies are unchanged.
+          key: go-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-version.outputs.version }}-${{ hashFiles('webapp/go/go.mod', 'webapp/go/go.sum') }}-${{ hashFiles('webapp/go/**') }}
+          restore-keys: |
+            go-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-version.outputs.version }}-${{ hashFiles('webapp/go/go.mod', 'webapp/go/go.sum') }}-
+            go-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-version.outputs.version }}-
       - name: Check deployment script syntax
         run: bash -n scripts/deploy-remote.sh && python3 -m py_compile scripts/deploy.py
-      # setup-go publishes PATH only after the background step is joined.
-      - wait: toolchain
+      - wait: toolchain-cache
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.go-version.outputs.version }}
+          cache: false
+      - wait: build-cache
       - name: Go vet
         id: vet
         background: true
