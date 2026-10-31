@@ -60,7 +60,7 @@ def ensure_app_schema(work, remote):
     before activating any application host. Older REFs need no new tables.
     """
     command = '. /home/isucon/env.sh; export PGPASSWORD="$ISUREAL_DB_PASSWORD"; exec psql -X --no-password -v ON_ERROR_STOP=1 -h "$ISUREAL_DB_HOST" -p "$ISUREAL_DB_PORT" -U "$ISUREAL_DB_USER" -d "$ISUREAL_DB_NAME"'
-    for name in ('005-image-cache.sql', '006-notification-batches.sql', '007-user-search.sql', '009-image-storage-external.sql'):
+    for name in ('005-image-cache.sql', '006-notification-batches.sql', '007-user-search.sql', '009-image-storage-external.sql', '010-regional-read-leases.sql'):
         path = work / 'webapp/sql' / name
         if path.exists():
             print('asia2: required application schema ' + name, flush=True)
@@ -69,7 +69,7 @@ def ensure_app_schema(work, remote):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('action', choices=['regional-deploy', 'build', 'deploy', 'preflight', 'rollback', 'status', 'logs', 'deploy-indexes', 'verify-indexes', 'nginx-log', 'alp', 'enable-pgstats', 'alp-install', 'nginx-deploy', 'nginx-rotate', 'pgstats-reset', 'pg-tune', 'deploy-cache-schema', 'deploy-notification-schema'])
+    p.add_argument('action', choices=['regional-deploy', 'build', 'deploy', 'preflight', 'rollback', 'status', 'logs', 'deploy-indexes', 'verify-indexes', 'nginx-log', 'alp', 'enable-pgstats', 'alp-install', 'nginx-deploy', 'nginx-rotate', 'pgstats-reset', 'pg-tune', 'deploy-cache-schema', 'deploy-notification-schema', 'remove-regional-read-leases'])
     p.add_argument('--ref', default='HEAD')
     p.add_argument('--hosts', default='asia1 europe1 america1')
     a = p.parse_args()
@@ -85,7 +85,7 @@ def main():
             p.error('competition ended; wait for organizer permission and update this guard explicitly')
     if a.action in ('regional-deploy', 'deploy', 'rollback', 'preflight', 'nginx-deploy', 'nginx-rotate') and 'asia2' in names:
         p.error('application actions cannot target the DB server asia2')
-    if a.action in ('deploy-indexes', 'verify-indexes', 'enable-pgstats', 'pgstats-reset', 'pg-tune', 'deploy-cache-schema', 'deploy-notification-schema') and names != ['asia2']:
+    if a.action in ('deploy-indexes', 'verify-indexes', 'enable-pgstats', 'pgstats-reset', 'pg-tune', 'deploy-cache-schema', 'deploy-notification-schema', 'remove-regional-read-leases') and names != ['asia2']:
         p.error('DB operations require HOSTS=asia2')
     if a.action == 'regional-deploy' and names != ['asia1', 'europe1', 'america1']:
         p.error('regional-deploy requires HOSTS="asia1 europe1 america1" in that order')
@@ -172,13 +172,15 @@ def main():
             if a.action == 'enable-pgstats':
                 remote('asia2', 'bash -s', input=(work/'scripts/enable-pgstats.sh').read_bytes())
                 return
-            if a.action.endswith('indexes') or a.action in ('deploy-cache-schema', 'deploy-notification-schema'):
+            if a.action.endswith('indexes') or a.action in ('deploy-cache-schema', 'deploy-notification-schema', 'remove-regional-read-leases'):
                 sql = '004-performance-indexes.sql' if a.action == 'deploy-indexes' else 'verify-performance-indexes.sql'
                 files = [sql, 'verify-performance-indexes.sql'] if a.action == 'deploy-indexes' else [sql]
                 if a.action == 'deploy-cache-schema':
                     files = ['005-image-cache.sql']
                 elif a.action == 'deploy-notification-schema':
                     files = ['006-notification-batches.sql']
+                elif a.action == 'remove-regional-read-leases':
+                    files = ['remove-regional-read-leases.sql']
                 command = '. /home/isucon/env.sh; export PGPASSWORD="$ISUREAL_DB_PASSWORD"; exec psql -X --no-password -v ON_ERROR_STOP=1 -h "$ISUREAL_DB_HOST" -p "$ISUREAL_DB_PORT" -U "$ISUREAL_DB_USER" -d "$ISUREAL_DB_NAME"'
                 for f in files:
                     remote('asia2', 'bash -eu -c ' + shlex.quote(command), input=(work/'webapp/sql'/f).read_bytes())
@@ -227,7 +229,7 @@ def main():
             if a.action == 'regional-deploy':
                 deploy_nginx(work, rev)
 
-    if a.action in ('regional-deploy', 'deploy', 'rollback', 'deploy-indexes', 'enable-pgstats', 'nginx-deploy', 'alp-install', 'pg-tune', 'deploy-cache-schema', 'deploy-notification-schema'):
+    if a.action in ('regional-deploy', 'deploy', 'rollback', 'deploy-indexes', 'enable-pgstats', 'nginx-deploy', 'alp-install', 'pg-tune', 'deploy-cache-schema', 'deploy-notification-schema', 'remove-regional-read-leases'):
         with mutation(f'{a.action} ref={a.ref} hosts={a.hosts}'):
             perform()
     else:

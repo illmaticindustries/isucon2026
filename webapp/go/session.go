@@ -75,6 +75,10 @@ func (h *HandlerContext) readSessions(ctx context.Context, hashes []string) ([]*
 func SessionMiddleware(handlerContext *HandlerContext, authRequired bool) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
+			if v, _ := c.Get("regional_read").(*regionalRead); v != nil && v.session != nil {
+				c.Set("session", v.session)
+				return next(c)
+			}
 			session, err := handlerContext.getSessionFromHeader(c)
 			if err != nil {
 				return err
