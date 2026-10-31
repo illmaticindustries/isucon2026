@@ -32,7 +32,7 @@ nginxの設定はリポジトリの `etc/nginx/` が正。`make nginx-deploy REF
 
 ## PostgreSQL設定
 
-asia2の設定はリポジトリの `etc/postgresql/16/main/conf.d/tuning.conf` が正。`make pg-tune REF=<SHA> PORTAL_IDLE=yes` で共有予約を取得し、既存ファイルをバックアップして配置、`postgresql@16-main` を再起動する（`shared_buffers` 変更のため再起動が必要で、数秒間3台のアプリからDBに接続できない）。起動しない場合は元のファイルに戻して再起動する。成功時は `tuning.conf` 由来の設定値を表示する。バックアップは asia2 の /home/isucon/.isureal-deploy/postgres-backup.*。`fsync`・`synchronous_commit`・`full_page_writes` など永続性に関わる設定は変更しない。
+asia2の設定はリポジトリの `etc/postgresql/16/main/conf.d/tuning.conf` が正。`make pg-tune REF=<SHA> PORTAL_IDLE=yes` で共有予約を取得し、既存ファイルをバックアップして配置する。`pg_file_settings` で値の誤りを検出したら元に戻してreloadしない。問題なければreloadし、`shared_buffers` など再起動が必要な設定（`pending_restart`）が変わったときだけ `postgresql@16-main` を再起動する（再起動中の数秒間は3台のアプリからDBに接続できず、バッファキャッシュも空になる）。起動しない場合は元のファイルに戻して再起動する。成功時は `tuning.conf` 由来の設定値と、reload/restartのどちらを行ったかを表示する。バックアップは asia2 の /home/isucon/.isureal-deploy/postgres-backup.*。`fsync`・`synchronous_commit`・`full_page_writes` など永続性に関わる設定は変更しない。
 
 ## CI
 
