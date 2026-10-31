@@ -65,6 +65,20 @@ CREATE TABLE image_objects_202705 PARTITION OF image_objects FOR VALUES FROM ('2
 CREATE TABLE image_objects_202706 PARTITION OF image_objects FOR VALUES FROM ('2027-06-01 00:00:00+00') TO ('2027-07-01 00:00:00+00');
 CREATE TABLE image_objects_default PARTITION OF image_objects DEFAULT;
 
+-- 画像はJPEGで非圧縮性のため、TOAST圧縮は必ず失敗して無駄なCPUを消費する。
+-- 保存方式は変えず、圧縮の試行だけを止める (EXTERNAL)。ストレージ設定はパーティション単位。
+DO $$
+DECLARE part text;
+BEGIN
+  ALTER TABLE image_objects ALTER COLUMN data SET STORAGE EXTERNAL;
+  FOR part IN
+    SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid
+    WHERE i.inhparent = 'image_objects'::regclass
+  LOOP
+    EXECUTE format('ALTER TABLE %I ALTER COLUMN data SET STORAGE EXTERNAL', part);
+  END LOOP;
+END $$;
+
 CREATE TABLE users (
   id varchar(36) PRIMARY KEY,
   username varchar(64) NOT NULL,
