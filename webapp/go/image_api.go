@@ -49,7 +49,14 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 			MediaType string `db:"media_type"`
 			Valid     bool   `db:"valid"`
 		}
-		err = h.DB.GetContext(ctx, &metadata, `
+		if entry, ok := loadImageMeta(time.Now(), input.ImageID); ok {
+			metadata.SecretKeyHash = entry.secretKeyHash
+			metadata.Generation = entry.generation
+			metadata.CreatedAt = entry.createdAt
+			metadata.MediaType = entry.mediaType
+			metadata.Valid = entry.valid
+		} else {
+			err = h.DB.GetContext(ctx, &metadata, `
    SELECT u.secret_key_hash, g.generation, i.created_at, i.media_type,
      (COALESCE(u.profile_image_id = i.id, false)
       OR EXISTS (SELECT 1 FROM posts p WHERE p.image_id = i.id AND p.author_id = u.id AND p.deleted_at IS NULL)
@@ -61,11 +68,19 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
    CROSS JOIN image_cache_generation g
    WHERE i.id = $1 AND u.status = 'active'
   `, input.ImageID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return NewAPIError(http.StatusForbidden, "image_forbidden")
-		}
-		if err != nil {
-			return err
+			if errors.Is(err, sql.ErrNoRows) {
+				return NewAPIError(http.StatusForbidden, "image_forbidden")
+			}
+			if err != nil {
+				return err
+			}
+			storeImageMeta(input.ImageID, imageMetaEntry{
+				secretKeyHash: metadata.SecretKeyHash,
+				generation:    metadata.Generation,
+				createdAt:     metadata.CreatedAt,
+				mediaType:     metadata.MediaType,
+				valid:         metadata.Valid,
+			})
 		}
 		key, err := imageSigningKey(metadata.SecretKeyHash)
 		if err != nil {

@@ -19,6 +19,7 @@ func initializeHandler(h *HandlerContext) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		imageBodies.clear()
 		defer imageBodies.clear()
+		clearImageMeta()
 		notificationBatches.clear()
 		defer notificationBatches.clear()
 		cmd := exec.Command("../sql/init.sh")
