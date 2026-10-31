@@ -12,10 +12,11 @@ import (
 )
 
 type HandlerContext struct {
-	DB         *sqlx.DB
-	Config     *Config
-	IPBans     *IPBanList
-	ImageFiles *imageFileStore
+	DB           *sqlx.DB
+	Config       *Config
+	IPBans       *IPBanList
+	ImageFiles   *imageFileStore
+	sessionReads readBatch[string, *Session]
 }
 
 func NewServer(config *Config) *echo.Echo {
