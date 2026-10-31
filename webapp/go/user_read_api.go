@@ -1,6 +1,7 @@
 package isureal
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v5"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
@@ -57,71 +59,24 @@ func searchUsersHandler(h *HandlerContext) echo.HandlerFunc {
 		}
 		ctx := c.Request().Context()
 		viewer := GetSession(c).UserID
-		blocked, err := getBlockedUserIDs(ctx, h.DB, viewer)
-		if err != nil {
-			return err
-		}
 		query := normalizeSearchText(input.Q)
 		// PostgreSQL text cannot contain NUL, but the API accepts it in q. The
 		// original Go comparison therefore returns no matches, not a SQL error.
 		if strings.ContainsRune(query, '\x00') {
 			return c.JSON(http.StatusOK, searchUsersResponse{Items: []relationshipUserResponse{}})
 		}
-		// Match on narrow rows and stop at 51 matches; decoding every column of every
-		// active user dominated asia1 CPU. Both queries share one snapshot.
-		tx, err := h.DB.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+		users, candidates, err := searchUsersPage(ctx, h.DB, searchCandidateQuery+" LIMIT 51", viewer, input, query)
 		if err != nil {
 			return err
 		}
-		defer tx.Rollback()
-		rows, err := tx.QueryContext(ctx, searchCandidateQuery, viewer, input.BeforeUsername, input.BeforeID, query)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		ids := make([]string, 0, 51)
-		for rows.Next() {
-			var id, username, displayName string
-			if err := rows.Scan(&id, &username, &displayName); err != nil {
+		// Stale derived fields can admit nonmatches. Only when those fill a page
+		// do we repeat the whole read from a fresh snapshot without the SQL cap.
+		if candidates == 51 && len(users) < 51 {
+			users, _, err = searchUsersPage(ctx, h.DB, searchCandidateQuery, viewer, input, query)
+			if err != nil {
 				return err
 			}
-			if blocked[id] {
-				continue
-			}
-			if !strings.Contains(normalizeSearchText(username), query) && !strings.Contains(normalizeSearchText(displayName), query) {
-				continue
-			}
-			ids = append(ids, id)
-			if len(ids) == 51 {
-				break
-			}
 		}
-		if err := rows.Close(); err != nil {
-			return err
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		users := make([]User, 0, len(ids))
-		if len(ids) > 0 {
-			var fetched []User
-			if err := tx.SelectContext(ctx, &fetched, `SELECT `+strings.Join(userColumns, ", ")+` FROM users WHERE id = ANY($1)`, ids); err != nil {
-				return err
-			}
-			byID := make(map[string]User, len(fetched))
-			for _, user := range fetched {
-				byID[user.ID] = user
-			}
-			for _, id := range ids {
-				if user, ok := byID[id]; ok {
-					users = append(users, user)
-				}
-			}
-		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-		// Release the database connection before computing response signatures.
 		items := make([]relationshipUserResponse, 0, len(users))
 		for _, user := range users {
 			if err := user.setImageKey(); err != nil {
@@ -138,6 +93,34 @@ func searchUsersHandler(h *HandlerContext) echo.HandlerFunc {
 		}
 		return c.JSON(http.StatusOK, searchUsersResponse{Items: items, HasMore: hasMore})
 	}
+}
+
+// Blocks, ordering and response fields come from the same statement snapshot.
+func searchUsersPage(ctx context.Context, db *sqlx.DB, statement, viewer string, input searchUsersRequest, query string) ([]User, int, error) {
+	rows, err := db.QueryxContext(ctx, statement, viewer, input.BeforeUsername, input.BeforeID, query)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	users := make([]User, 0, 51)
+	var candidates int
+	for rows.Next() {
+		var user User
+		if err := rows.StructScan(&user); err != nil {
+			return nil, 0, err
+		}
+		candidates++
+		if strings.Contains(normalizeSearchText(user.Username), query) || strings.Contains(normalizeSearchText(user.DisplayName), query) {
+			users = append(users, user)
+			if len(users) == 51 {
+				break
+			}
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return nil, 0, err
+	}
+	return users, candidates, rows.Err()
 }
 
 type getUserRequest struct {

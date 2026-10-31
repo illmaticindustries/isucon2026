@@ -17,7 +17,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// Real PostgreSQL validates the prefilter, transaction snapshot, pgx parameters,
+// Real PostgreSQL validates the prefilter, block visibility, pgx parameters,
 // Unicode normalization, and write paths. Only connection-local TEMP tables are
 // created, so this test cannot modify pre-existing application tables.
 func TestSearchPostgres(t *testing.T) {
@@ -126,11 +126,12 @@ func TestSearchPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	check()
-	var candidates []struct {
-		ID          string
-		Username    string
-		DisplayName string `db:"display_name"`
-	}
+	// The next search must see each committed block change in either direction.
+	db.MustExec(`INSERT INTO block_relations VALUES ('viewer','u1'), ('u2','viewer')`)
+	check()
+	db.MustExec(`DELETE FROM block_relations WHERE (blocker_id,blocked_id) IN (('viewer','u1'),('u2','viewer'))`)
+	check()
+	var candidates []User
 	if err := db.Select(&candidates, searchCandidateQuery, "viewer", "", "", "not-present"); err != nil {
 		t.Fatal(err)
 	}
