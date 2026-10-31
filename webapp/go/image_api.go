@@ -45,10 +45,12 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 			SecretKeyHash string    `db:"secret_key_hash"`
 			Generation    int64     `db:"generation"`
 			CreatedAt     time.Time `db:"created_at"`
-			Valid         bool      `db:"valid"`
+
+			MediaType string `db:"media_type"`
+			Valid     bool   `db:"valid"`
 		}
 		err = h.DB.GetContext(ctx, &metadata, `
-   SELECT u.secret_key_hash, g.generation, i.created_at,
+   SELECT u.secret_key_hash, g.generation, i.created_at, i.media_type,
      (COALESCE(u.profile_image_id = i.id, false)
       OR EXISTS (SELECT 1 FROM posts p WHERE p.image_id = i.id AND p.author_id = u.id AND p.deleted_at IS NULL)
       OR EXISTS (SELECT 1 FROM realmojis r
@@ -79,7 +81,25 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 			return NewAPIError(http.StatusForbidden, "image_forbidden")
 		}
 		cacheKey := imageBodyKey{ID: input.ImageID, CreatedAt: metadata.CreatedAt, OwnerKey: metadata.SecretKeyHash}
+		fileKey := ""
+		if h.ImageFiles != nil && canAccelImage(c.Request()) {
+			fileKey = fileImageKey(cacheKey.ID, cacheKey.CreatedAt, metadata.MediaType, metadata.Generation)
+		}
+		serveFile := func() error {
+			if exp <= time.Now().Unix() {
+				return NewAPIError(http.StatusForbidden, "image_forbidden")
+			}
+			c.Response().Header().Set("Content-Type", metadata.MediaType)
+			c.Response().Header().Set("X-Accel-Redirect", imageFilePrefix+fileKey)
+			return c.NoContent(http.StatusOK)
+		}
+		if h.ImageFiles.exists(fileKey) {
+			return serveFile()
+		}
 		if body, ok := imageBodies.get(metadata.Generation, cacheKey); ok {
+			if fileKey != "" && h.ImageFiles.put(fileKey, metadata.Generation, body.Data) {
+				return serveFile()
+			}
 			if exp <= time.Now().Unix() {
 				return NewAPIError(http.StatusForbidden, "image_forbidden")
 			}
@@ -118,6 +138,9 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 			return NewAPIError(http.StatusForbidden, "image_forbidden")
 		}
 		imageBodies.put(metadata.Generation, cacheKey, cachedImageBody{Data: object.Data, MediaType: object.MediaType})
+		if fileKey != "" && h.ImageFiles.put(fileKey, metadata.Generation, object.Data) {
+			return serveFile()
+		}
 		return c.Blob(http.StatusOK, object.MediaType, object.Data)
 	}
 }

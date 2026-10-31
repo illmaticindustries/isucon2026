@@ -99,9 +99,9 @@ func (c *imageTestConn) QueryContext(_ context.Context, q string, _ []driver.Nam
 		return &notificationRows{[]string{"data", "media_type"}, [][]driver.Value{{[]byte(s.body), "image/jpeg"}}}, nil
 	}
 	s.metadataCalls++
-	rows := &notificationRows{columns: []string{"secret_key_hash", "generation", "created_at", "valid"}}
+	rows := &notificationRows{columns: []string{"secret_key_hash", "generation", "created_at", "valid", "media_type"}}
 	if s.active {
-		rows.values = [][]driver.Value{{s.key, s.epoch, time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC), s.valid}}
+		rows.values = [][]driver.Value{{s.key, s.epoch, time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC), s.valid, "image/jpeg"}}
 	}
 	return rows, nil
 }

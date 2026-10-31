@@ -14,10 +14,11 @@ type Config struct {
 	DBPassword string
 	DBName     string
 	LogLevel   string
+	ImageFiles *imageFileStore
 }
 
 func ConfigFromEnv() *Config {
-	return &Config{
+	c := &Config{
 		Region:     envOrDefault("ISUREAL_REGION", "asia"),
 		DBHost:     envOrDefault("ISUREAL_DB_HOST", "127.0.0.1"),
 		DBPort:     envOrDefault("ISUREAL_DB_PORT", "5432"),
@@ -26,6 +27,10 @@ func ConfigFromEnv() *Config {
 		DBName:     envOrDefault("ISUREAL_DB_NAME", "isureal"),
 		LogLevel:   envOrDefault("ISUREAL_LOG_LEVEL", "debug"),
 	}
+	if c.Region == "asia" {
+		c.ImageFiles = &imageFileStore{root: "/home/isucon/.isureal-image-files"}
+	}
+	return c
 }
 
 func (c *Config) DatabaseDSN() string {
