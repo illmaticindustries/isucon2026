@@ -195,7 +195,11 @@ func (d *decoder) processSOS(n int) error {
 						b = block{}
 					}
 
-					if ah != 0 {
+					if !d.progressive {
+						if err := d.validateSequentialBlock(&d.huff[dcTable][scan[i].td], &d.huff[acTable][scan[i].ta]); err != nil {
+							return err
+						}
+					} else if ah != 0 {
 						if err := d.refine(&b, &d.huff[acTable][scan[i].ta], zigStart, zigEnd, 1<<al); err != nil {
 							return err
 						}
@@ -303,6 +307,68 @@ func (d *decoder) processSOS(n int) error {
 		} // for mx
 	} // for my
 
+	return nil
+}
+
+// Sequential coefficients never affect a later scan or validation decision.
+// Read every Huffman symbol and amplitude bit, retaining the original error and
+// EOB handling, without sign extension or storing discarded coefficient values.
+// Progressive scans still need those values and use the original path above.
+func (d *decoder) validateSequentialBlock(dc, ac *huffman) error {
+	value, err := d.decodeHuffman(dc)
+	if err != nil {
+		return err
+	}
+	if value > 16 {
+		return UnsupportedError("excessive DC component")
+	}
+	if err := d.skipAmplitude(value); err != nil {
+		return err
+	}
+	if d.eobRun > 0 {
+		d.eobRun--
+		return nil
+	}
+	for zig := int32(1); zig < blockSize; zig++ {
+		value, err := d.decodeHuffman(ac)
+		if err != nil {
+			return err
+		}
+		run, size := value>>4, value&15
+		if size != 0 {
+			zig += int32(run)
+			if zig >= blockSize {
+				break
+			}
+			if err := d.skipAmplitude(size); err != nil {
+				return err
+			}
+		} else if run == 15 {
+			zig += 15
+		} else {
+			d.eobRun = uint16(1 << run)
+			if run != 0 {
+				bits, err := d.decodeBits(int32(run))
+				if err != nil {
+					return err
+				}
+				d.eobRun |= uint16(bits)
+			}
+			d.eobRun--
+			break
+		}
+	}
+	return nil
+}
+
+func (d *decoder) skipAmplitude(n uint8) error {
+	if d.bits.n < int32(n) {
+		if err := d.ensureNBits(int32(n)); err != nil {
+			return err
+		}
+	}
+	d.bits.n -= int32(n)
+	d.bits.m >>= n
 	return nil
 }
 

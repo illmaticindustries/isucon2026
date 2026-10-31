@@ -74,6 +74,22 @@ func TestEntropyCorruption(t *testing.T) {
 	}
 }
 
+func TestSequentialEveryTruncation(t *testing.T) {
+	img := image.NewGray(image.Rect(0, 0, 17, 9))
+	r := rand.New(rand.NewSource(41))
+	_, _ = r.Read(img.Pix)
+	for _, quality := range []int{1, 50, 100} {
+		var encoded bytes.Buffer
+		if err := jpeg.Encode(&encoded, img, &jpeg.Options{Quality: quality}); err != nil {
+			t.Fatal(err)
+		}
+		data := encoded.Bytes()
+		for end := 0; end <= len(data); end++ {
+			compare(t, data[:end])
+		}
+	}
+}
+
 func FuzzEquivalentAcceptance(f *testing.F) {
 	f.Add(encodedImage())
 	f.Add([]byte("not a jpeg"))
