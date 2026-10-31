@@ -259,8 +259,9 @@ func TestRegionalImageNginx(t *testing.T) {
 		{http.MethodPut, "/api/blocks/id", true},
 		{http.MethodDelete, "/api/blocks/id", true},
 		{http.MethodDelete, "/api/friendships/id", true},
-		// Session changes must stay in the process whose cache they invalidate.
-		{http.MethodPost, "/api/auth/login", false},
+		{http.MethodPost, "/api/auth/register", true},
+		{http.MethodPost, "/api/auth/login", true},
+		{http.MethodPost, "/api/auth/login-other", false},
 		{http.MethodPost, "/api/auth/logout", false},
 		{http.MethodPatch, "/api/me", false},
 		{http.MethodPost, "/api/me/account-deletion", false},
