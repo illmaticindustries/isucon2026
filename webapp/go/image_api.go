@@ -41,34 +41,13 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 		}
 
 		ctx := c.Request().Context()
-		var secretKeyHash string
-		err = h.DB.GetContext(ctx, &secretKeyHash, `
-   SELECT u.secret_key_hash
-   FROM image_objects i JOIN users u ON u.id = i.owner_user_id
-   WHERE i.id = $1 AND u.status = 'active'
-  `, input.ImageID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return NewAPIError(http.StatusForbidden, "image_forbidden")
-		}
-		if err != nil {
-			return err
-		}
-		key, err := imageSigningKey(secretKeyHash)
-		if err != nil {
-			return err
-		}
-		if !hmac.Equal(sig, imageSignature(key, input.ImageID, exp)) {
-			c.Set("abuse", "invalid_signature")
-			return NewAPIError(http.StatusForbidden, "image_forbidden")
-		}
-
-		// 削除状態を毎回確認する。即時反映も5秒以内の許容範囲に含まれる。
 		var object struct {
-			Data      []byte `db:"data"`
-			MediaType string `db:"media_type"`
+			Data          []byte `db:"data"`
+			MediaType     string `db:"media_type"`
+			SecretKeyHash string `db:"secret_key_hash"`
 		}
 		err = h.DB.GetContext(ctx, &object, `
-   SELECT i.data, i.media_type
+   SELECT i.data, i.media_type, u.secret_key_hash
    FROM image_objects i JOIN users u ON u.id = i.owner_user_id AND u.status = 'active'
    WHERE i.id = $1 AND (
      u.profile_image_id = i.id
@@ -89,6 +68,14 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 		}
 		if err != nil {
 			return err
+		}
+		key, err := imageSigningKey(object.SecretKeyHash)
+		if err != nil {
+			return err
+		}
+		if !hmac.Equal(sig, imageSignature(key, input.ImageID, exp)) {
+			c.Set("abuse", "invalid_signature")
+			return NewAPIError(http.StatusForbidden, "image_forbidden")
 		}
 		if exp <= time.Now().Unix() {
 			return NewAPIError(http.StatusForbidden, "image_forbidden")
