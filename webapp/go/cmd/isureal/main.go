@@ -36,7 +36,7 @@ func main() {
 		listenerDB := db
 		if region != config.Region {
 			regionalConfig.Forwarded = true
-			listenerDB = isureal.OpenForwardedDatabase(config)
+			listenerDB = isureal.OpenForwardedDatabase(&regionalConfig)
 			defer listenerDB.Close()
 		}
 		server := isureal.NewServerWithDB(&regionalConfig, listenerDB)

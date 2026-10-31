@@ -8,11 +8,13 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 )
 
 var diagnosticDB atomic.Pointer[sql.DB]
+var diagnosticForwarded sync.Map // ingress region to *sql.DB, registered at startup
 var diagnosticStarted = time.Now().UTC()
 
 const blockSampleNanoseconds = 10_000_000 // sample roughly one per 10ms blocked
@@ -24,16 +26,22 @@ func dbStatsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "database not ready", http.StatusServiceUnavailable)
 		return
 	}
+	forwarded := make(map[string]sql.DBStats)
+	diagnosticForwarded.Range(func(region, pool any) bool {
+		forwarded[region.(string)] = pool.(*sql.DB).Stats()
+		return true
+	})
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(struct {
-		Time          time.Time   `json:"time"`
-		Started       time.Time   `json:"started"`
-		PID           int         `json:"pid"`
-		BlockRate     int         `json:"block_rate_ns"`
-		MutexFraction int         `json:"mutex_fraction"`
-		DB            sql.DBStats `json:"db"`
-	}{time.Now().UTC(), diagnosticStarted, os.Getpid(), blockSampleNanoseconds, mutexSampleFraction, db.Stats()})
+		Time          time.Time              `json:"time"`
+		Started       time.Time              `json:"started"`
+		PID           int                    `json:"pid"`
+		BlockRate     int                    `json:"block_rate_ns"`
+		MutexFraction int                    `json:"mutex_fraction"`
+		DB            sql.DBStats            `json:"db"`
+		Forwarded     map[string]sql.DBStats `json:"forwarded,omitempty"`
+	}{time.Now().UTC(), diagnosticStarted, os.Getpid(), blockSampleNanoseconds, mutexSampleFraction, db.Stats(), forwarded})
 }
 
 // Profiling is reachable only from this host, never through the public router.

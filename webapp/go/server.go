@@ -41,7 +41,9 @@ func OpenDatabase(config *Config) *sqlx.DB {
 // another region's forwarded requests, so they do not queue behind this
 // region's saturated pool.
 func OpenForwardedDatabase(config *Config) *sqlx.DB {
-	return openDatabase(config, forwardedPoolSize)
+	db := openDatabase(config, forwardedPoolSize)
+	diagnosticForwarded.Store(config.Region, db.DB)
+	return db
 }
 
 func openDatabase(config *Config, maxConns int) *sqlx.DB {
