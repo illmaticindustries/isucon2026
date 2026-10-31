@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/labstack/echo/v5"
 )
@@ -58,7 +59,9 @@ var logLevelRanks = map[string]int{"debug": 0, "info": 1, "error": 2}
 func ActionLogMiddleware(minLevel string, output io.Writer) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
+			start := time.Now()
 			err := next(c)
+			elapsed := time.Since(start)
 			if err != nil {
 				c.Echo().HTTPErrorHandler(c, err)
 			}
@@ -77,11 +80,12 @@ func ActionLogMiddleware(minLevel string, output io.Writer) echo.MiddlewareFunc 
 
 			route := c.RouteInfo()
 			entry := map[string]any{
-				"level":   level,
-				"action":  nil,
-				"status":  status,
-				"ip":      c.RealIP(),
-				"user_id": nil,
+				"level":       level,
+				"action":      nil,
+				"status":      status,
+				"ip":          c.RealIP(),
+				"user_id":     nil,
+				"duration_ms": elapsed.Milliseconds(),
 			}
 			action, ok := actionNames[route.Method+" "+route.Path]
 			if ok {
