@@ -31,8 +31,8 @@ export PORTAL_IDLE ?= no
 export OPERATION_TOKEN ?=
 export BENCH_NOTE ?= portal benchmark
 
-.PHONY: deploy-notification-schema deploy-cache-schema enable-pgstats pg-tune bench-reserve bench-release operation-status
-deploy-notification-schema deploy-cache-schema enable-pgstats pg-tune:
+.PHONY: deploy-notification-schema deploy-cache-schema remove-regional-read-leases enable-pgstats pg-tune bench-reserve bench-release operation-status
+deploy-notification-schema deploy-cache-schema remove-regional-read-leases enable-pgstats pg-tune:
 	python3 scripts/deploy.py $@ --ref "$$REF" --hosts asia2
 
 bench-reserve:

@@ -16,6 +16,7 @@ type HandlerContext struct {
 	Config       *Config
 	IPBans       *IPBanList
 	ImageFiles   *imageFileStore
+	regional     regionalReads
 	sessionReads readBatch[string, *Session]
 }
 
@@ -79,6 +80,9 @@ func NewServerWithDB(config *Config, db *sqlx.DB) *echo.Echo {
 		Config:     config,
 		IPBans:     &IPBanList{},
 		ImageFiles: config.ImageFiles,
+	}
+	if !config.Forwarded && (config.Region == "europe" || config.Region == "america") {
+		e.Use(regionalReadMiddleware(handlerContext))
 	}
 	e.Use(IPBanMiddleware(handlerContext))
 

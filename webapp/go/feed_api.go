@@ -64,7 +64,12 @@ func getFeedHandler(h *HandlerContext) echo.HandlerFunc {
 				}
 				items = append(items, feedItemResponse{createPostResponse: newPostResponse(post.Post, post.Author)})
 			}
-			return c.JSON(http.StatusOK, getFeedResponse{Items: items, HasMore: hasMore})
+			page := getFeedResponse{Items: items, HasMore: hasMore}
+			if v, _ := c.Get("regional_read").(*regionalRead); v != nil {
+				v.feed = &page
+				h.regional.store(*v)
+			}
+			return c.JSON(http.StatusOK, page)
 		}
 		// Ranked feeds need every eligible candidate before sorting by score.
 		viewer, err := loadViewerContext(ctx, h.DB, GetSession(c).UserID)

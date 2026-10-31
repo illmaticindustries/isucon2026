@@ -1,6 +1,7 @@
 package isureal
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"database/sql"
@@ -18,6 +19,44 @@ type getImageRequest struct {
 	ImageID string `param:"imageId" json:"-"`
 	Exp     string `query:"exp" json:"-"`
 	Sig     string `query:"sig" json:"-"`
+}
+
+type imageMetadata struct {
+	SecretKeyHash string    `db:"secret_key_hash"`
+	Generation    int64     `db:"generation"`
+	CreatedAt     time.Time `db:"created_at"`
+	MediaType     string    `db:"media_type"`
+	Source        string    `db:"source"`
+}
+
+// Revalidate after acquiring the durable lease. A deletion, reset or key
+// change that raced with reading the bytes cannot seed the regional cache.
+func (h *HandlerContext) rememberPostImage(c *echo.Context, metadata imageMetadata, id, file string, exp int64) {
+	v, _ := c.Get("regional_read").(*regionalRead)
+	if v == nil || metadata.Source != "post" || !h.regional.startImageFill(v.key) {
+		return
+	}
+	// Echo reuses the request context. Pass only immutable values to this
+	// bounded background check, and never hold the first image response for it.
+	entry, ip := *v, c.RealIP()
+	go func() {
+		defer h.regional.finishImageFill(entry.key)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		start := time.Now()
+		var current imageMetadata
+		if err := h.DB.GetContext(ctx, &current, `SELECT * FROM regional_image_grant($1,$2)`, id, ip); err != nil {
+			return
+		}
+		if current.Generation != metadata.Generation || current.SecretKeyHash != metadata.SecretKeyHash ||
+			current.MediaType != metadata.MediaType || !current.CreatedAt.Equal(metadata.CreatedAt) {
+			return
+		}
+		entry.until = start.Add(imageReadLifetime)
+		entry.file, entry.mediaType, entry.exp = file, metadata.MediaType, exp
+		h.regional.store(entry)
+		regionalReadCounts.imageFills.Add(1)
+	}()
 }
 
 func getImageHandler(h *HandlerContext) echo.HandlerFunc {
@@ -41,22 +80,15 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 		}
 
 		ctx := c.Request().Context()
-		var metadata struct {
-			SecretKeyHash string    `db:"secret_key_hash"`
-			Generation    int64     `db:"generation"`
-			CreatedAt     time.Time `db:"created_at"`
-
-			MediaType string `db:"media_type"`
-			Valid     bool   `db:"valid"`
-		}
+		var metadata imageMetadata
 		err = h.DB.GetContext(ctx, &metadata, `
    SELECT u.secret_key_hash, g.generation, i.created_at, i.media_type,
-     (COALESCE(u.profile_image_id = i.id, false)
-      OR EXISTS (SELECT 1 FROM posts p WHERE p.image_id = i.id AND p.author_id = u.id AND p.deleted_at IS NULL)
-      OR EXISTS (SELECT 1 FROM realmojis r
+     CASE WHEN u.profile_image_id = i.id THEN 'profile'
+      WHEN EXISTS (SELECT 1 FROM posts p WHERE p.image_id = i.id AND p.author_id = u.id AND p.deleted_at IS NULL) THEN 'post'
+      WHEN EXISTS (SELECT 1 FROM realmojis r
         JOIN posts p ON p.id = r.post_id AND p.deleted_at IS NULL
         JOIN users author ON author.id = p.author_id AND author.status = 'active'
-        WHERE r.image_id = i.id AND r.reactor_id = u.id AND r.replaced_at IS NULL AND r.deleted_at IS NULL)) AS valid
+        WHERE r.image_id = i.id AND r.reactor_id = u.id AND r.replaced_at IS NULL AND r.deleted_at IS NULL) THEN 'realmoji' ELSE '' END AS source
    FROM image_objects i JOIN users u ON u.id = i.owner_user_id
    CROSS JOIN image_cache_generation g
    WHERE i.id = $1 AND u.status = 'active'
@@ -77,8 +109,11 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 		}
 
 		// Signature failures must still be recorded even for an invalid image.
-		if !metadata.Valid {
+		if metadata.Source == "" {
 			return NewAPIError(http.StatusForbidden, "image_forbidden")
+		}
+		if v, _ := c.Get("regional_read").(*regionalRead); v != nil && metadata.Source == "post" {
+			regionalReadCounts.imageMisses.Add(1)
 		}
 		cacheKey := imageBodyKey{ID: input.ImageID, CreatedAt: metadata.CreatedAt, OwnerKey: metadata.SecretKeyHash}
 		fileKey := ""
@@ -89,6 +124,7 @@ func getImageHandler(h *HandlerContext) echo.HandlerFunc {
 			if exp <= time.Now().Unix() {
 				return NewAPIError(http.StatusForbidden, "image_forbidden")
 			}
+			h.rememberPostImage(c, metadata, input.ImageID, fileKey, exp)
 			c.Response().Header().Set("Content-Type", metadata.MediaType)
 			c.Response().Header().Set("X-Accel-Redirect", imageFilePrefix+fileKey)
 			return c.NoContent(http.StatusOK)

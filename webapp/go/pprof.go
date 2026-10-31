@@ -41,6 +41,16 @@ func init() {
 	runtime.SetBlockProfileRate(blockSampleNanoseconds)
 	runtime.SetMutexProfileFraction(mutexSampleFraction)
 	http.HandleFunc("GET /debug/dbstats", dbStatsHandler)
+	http.HandleFunc("GET /debug/regional-reads", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]uint64{
+			"friend_hits":       regionalReadCounts.feedHits.Load(),
+			"friend_misses":     regionalReadCounts.feedMisses.Load(),
+			"post_image_hits":   regionalReadCounts.imageHits.Load(),
+			"post_image_misses": regionalReadCounts.imageMisses.Load(),
+			"post_image_fills":  regionalReadCounts.imageFills.Load(),
+		})
+	})
 	go func() {
 		if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil {
 			log.Printf("pprof listener: %v", err)

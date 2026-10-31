@@ -68,7 +68,18 @@ func extractClientIP(req *http.Request) string {
 func IPBanMiddleware(h *HandlerContext) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
-			banned, err := h.IPBans.Banned(c.Request().Context(), h.DB, c.RealIP())
+			var banned bool
+			var err error
+			if v, _ := c.Get("regional_read").(*regionalRead); v != nil {
+				if v.session != nil || h.regional.ipAllowed(v.ip) {
+					return next(c)
+				}
+				// A failed grant may mean that the IP was just banned.
+				err = h.DB.GetContext(c.Request().Context(), &banned,
+					`SELECT EXISTS(SELECT 1 FROM ip_bans WHERE ip=$1 AND banned_until>clock_timestamp())`, c.RealIP())
+			} else {
+				banned, err = h.IPBans.Banned(c.Request().Context(), h.DB, c.RealIP())
+			}
 			if err != nil {
 				return err
 			}

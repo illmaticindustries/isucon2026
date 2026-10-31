@@ -17,6 +17,7 @@ type initializeResponse struct {
 
 func initializeHandler(h *HandlerContext) echo.HandlerFunc {
 	return func(c *echo.Context) error {
+		h.regional.clear()
 		imageBodies.clear()
 		defer imageBodies.clear()
 		notificationBatches.clear()
