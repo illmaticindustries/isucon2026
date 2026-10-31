@@ -46,20 +46,22 @@ func putProfileImageHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		imageID := uuid.NewString()
-		if _, err := tx.ExecContext(ctx, `INSERT INTO image_objects(id,owner_user_id,data,media_type) VALUES ($1,$2,$3,'image/jpeg')`, imageID, userID, data); err != nil {
+		written, err := insertJPEG(ctx, tx, imageID, userID, data, nil)
+		if err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE users SET profile_image_id=$2,updated_at=clock_timestamp() WHERE id=$1`, userID, imageID); err != nil {
 			return err
 		}
 		if oldID != nil {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM image_objects WHERE id=$1`, *oldID); err != nil {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM image_objects WHERE id=$1 AND created_at > (SELECT created_at FROM initial_data_boundary)`, *oldID); err != nil {
 				return err
 			}
 		}
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+		h.ImageFiles.warmJPEG(written, imageID, data)
 		return c.NoContent(http.StatusNoContent)
 	}
 }
@@ -87,7 +89,7 @@ func deleteProfileImageHandler(h *HandlerContext) echo.HandlerFunc {
 		if _, err := tx.ExecContext(ctx, `UPDATE users SET profile_image_id=NULL,updated_at=clock_timestamp() WHERE id=$1`, userID); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM image_objects WHERE id=$1`, *imageID); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM image_objects WHERE id=$1 AND created_at > (SELECT created_at FROM initial_data_boundary)`, *imageID); err != nil {
 			return err
 		}
 		if err := tx.Commit(); err != nil {

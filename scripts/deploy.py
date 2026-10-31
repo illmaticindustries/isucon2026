@@ -106,7 +106,12 @@ def main():
             finally:
                 remote(n, 'rm -rf -- ' + shlex.quote(stage))
             print(n + ': nginx config ' + rev, flush=True)
-        run_hosts(names, deploy_one_nginx, workers)
+        if 'asia1' in names and 'isureal_image_backend' in (work/'etc/nginx/sites-available/isureal.conf').read_text():
+            # The remote ingresses depend on the private listeners being live.
+            deploy_one_nginx('asia1')
+            run_hosts([n for n in names if n != 'asia1'], deploy_one_nginx, workers)
+        else:
+            run_hosts(names, deploy_one_nginx, workers)
 
     def perform():
         if a.action in ('status', 'logs', 'preflight', 'rollback', 'nginx-log', 'alp'):
