@@ -8,6 +8,8 @@ export SSH_OPTIONS ?= -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChec
 help:
 	@echo 'make preflight | build | deploy | rollback | status | logs [REF=<pushed commit>] [HOSTS="asia1 europe1 america1"]'
 	@echo 'make deploy-indexes | verify-indexes REF=<pushed commit> HOSTS=asia2'
+	@echo 'Mutations require PORTAL_IDLE=yes after checking the portal.'
+	@echo 'Before Enqueue: make bench-reserve PORTAL_IDLE=yes; after completion: make bench-release PORTAL_IDLE=yes OPERATION_TOKEN=<token>'
 
 build deploy preflight rollback status logs deploy-indexes verify-indexes nginx-log alp:
 	python3 scripts/deploy.py $@ --ref "$$REF" --hosts "$$HOSTS"
@@ -18,8 +20,20 @@ go-build-local: build
 journalctl: logs
 deployed-version: status
 
-.PHONY: enable-pgstats
+# Portal confirmation is required for mutations and benchmark reservation.
+export PORTAL_IDLE ?= no
+export OPERATION_TOKEN ?=
+export BENCH_NOTE ?= portal benchmark
+
+.PHONY: enable-pgstats bench-reserve bench-release operation-status
 enable-pgstats:
-	git fetch origin
-	git merge-base --is-ancestor "$$REF" origin/ops/make-deploy
-	git show "$$REF:scripts/enable-pgstats.sh" | ssh $(SSH_OPTIONS) isucon@52.197.163.28 bash -s
+	python3 scripts/deploy.py $@ --ref "$$REF" --hosts asia2
+
+bench-reserve:
+	python3 scripts/operation_lock.py reserve
+
+bench-release:
+	python3 scripts/operation_lock.py release
+
+operation-status:
+	python3 scripts/operation_lock.py status

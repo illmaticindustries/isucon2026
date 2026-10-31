@@ -6,6 +6,12 @@ on:
         description: Registered app servers (space separated)
         default: asia1 europe1 america1
         required: true
+      portal_idle:
+        description: Confirm the team portal has no PENDING/WAITING/RUNNING job immediately before starting
+        type: choice
+        options: ['no', 'yes']
+        default: 'no'
+        required: true
 permissions:
   contents: read
 concurrency:
@@ -35,6 +41,7 @@ jobs:
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
       - name: Deploy using the same Makefile as local development
         env:
+          PORTAL_IDLE: ${{ inputs.portal_idle }}
           REF: ${{ github.sha }}
           HOSTS: ${{ inputs.hosts }}
           SSH_OPTIONS: -i /home/runner/.ssh/id_deploy -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes
