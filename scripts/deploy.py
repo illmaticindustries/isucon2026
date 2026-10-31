@@ -94,7 +94,8 @@ def main():
             return
         # Called by bench-reserve; skipped until enable-pgstats has been applied.
         if a.action == 'pgstats-reset':
-            remote('asia2', 'export LC_ALL=C.UTF-8; . /home/isucon/env.sh && { sudo -n -u postgres psql -X -At -d "$ISUREAL_DB_NAME" -c "SELECT pg_stat_statements_reset()" >/dev/null'
+            remote('asia2', 'export LC_ALL=C.UTF-8; . /home/isucon/env.sh && sudo -n -u postgres psql -X -At -d "$ISUREAL_DB_NAME"'
+                            ' -c "SELECT pg_stat_reset()" -c "SELECT pg_stat_reset_shared(\'bgwriter\')" >/dev/null && echo "database and bgwriter stats reset" || echo "database stats reset failed"; { sudo -n -u postgres psql -X -At -d "$ISUREAL_DB_NAME" -c "SELECT pg_stat_statements_reset()" >/dev/null'
                             ' && echo "pg_stat_statements reset" || echo "pg_stat_statements unavailable; skipped"; }')
             return
         if a.action == 'alp-install':
