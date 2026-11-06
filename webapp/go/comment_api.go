@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
-	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -51,35 +50,35 @@ func createCommentHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		defer tx.Rollback()
-		for _, id := range slices.Compact([]string{min(actor, post.AuthorID), max(actor, post.AuthorID)}) {
-			var lockedID string
-			if err := tx.GetContext(ctx, &lockedID, `SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE`, id); err != nil {
-				return err
-			}
-		}
-		allowed, err := canComment(ctx, tx, actor, post.ID)
+		_, err = lockRelationshipPair(ctx, tx, actor, post.AuthorID)
 		if err != nil {
 			return err
 		}
-		if !allowed {
+		// Recheck access after acquiring the pair lock. Independent commenters
+		// share the author's row lock, including on widely followed posts.
+		var result CommentWithAuthor
+		err = tx.GetContext(ctx, &result, `
+  WITH inserted AS (
+    INSERT INTO comments(id,post_id,author_id,body,created_at)
+    SELECT $4,p.id,v.id,$5,clock_timestamp()`+permittedPostFrom+`
+    RETURNING id,post_id,author_id,body,created_at,deleted_at
+  )
+  SELECT inserted.*, `+userColumnsAs("u", "author")+`
+  FROM inserted JOIN users u ON u.id=inserted.author_id`,
+			post.ID, actor, true, uuid.NewString(), input.Body)
+		if errors.Is(err, sql.ErrNoRows) {
 			return NewAPIError(http.StatusForbidden, "interaction_forbidden")
 		}
-		id := uuid.NewString()
-		if _, err := tx.ExecContext(ctx, `INSERT INTO comments(id,post_id,author_id,body,created_at) VALUES($1,$2,$3,$4,clock_timestamp())`, id, post.ID, actor, input.Body); err != nil {
-			return err
-		}
-		comment, err := getComment(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		user, err := getUser(ctx, tx, actor)
-		if err != nil {
+		if err := result.Author.setImageKey(); err != nil {
 			return err
 		}
 		if err := tx.Commit(); err != nil {
 			return err
 		}
-		return c.JSON(http.StatusCreated, newCommentResponse(comment, user))
+		return c.JSON(http.StatusCreated, newCommentResponse(result.Comment, result.Author))
 	}
 }
 
